@@ -1,0 +1,67 @@
+# config/defaults.yaml
+# ===================
+# Базовая конфигурация FESCO Container Tracking
+
+# API настройки FESCO
+api:
+  base_url: "https://api.fesco.com/api/v1/lk/"
+  token_type: "Bearer"
+  auth_token: "${FESCO_TOKEN}"
+  
+  # HTTP настройки
+  timeout_seconds: 15
+  max_parallel: 10
+  max_retries: 3
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+
+# Настройки кэширования
+cache:
+  type: "Redis"  # "file" или "redis"
+  ttl_hours: 1
+  
+  # Файловый кэш
+  dir: "./FescoApiParse/cache/"
+  
+  # Redis настройки (используются только если type: "redis")
+  redis:
+    url: "redis://localhost:6379"
+    prefix: "fesco_cache:"
+    socket_timeout: 5
+    retry_on_timeout: true
+
+# Настройки логирования
+logging:
+  level: "INFO"
+  format: "%(asctime)s [%(levelname)s] %(message)s"
+  date_format: "%H:%M:%S"
+  file: null  # null = только консоль, или путь к файлу
+  
+  # Уровни логирования для внешних библиотек
+  external_levels:
+    aiohttp: "WARNING"
+    asyncio: "WARNING"
+    urllib3: "WARNING"
+    redis: "WARNING"
+
+# Настройки вывода результатов
+output:
+  dir: "./FescoApiParse/output/"
+  filename: "fesco_tracking_results.json"
+  sort_by_container: true
+  include_metadata: true
+
+# Настройки обработки
+processing:
+  batch_size: 50
+  pause_between_batches: 0.5
+  deduplicate_events: true
+  prefer_container_events: true
+  enable_retries: true
+
+---
+
+
+
+
+
+

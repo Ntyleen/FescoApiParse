@@ -1,0 +1,15 @@
+### Test outputs and cache files
+cache/cache/
+output/
+ignore/
+logs/
+bckp/
+__pycache__*
+#### .env, configs
+*.env
+*.yaml
+*.yml
+*.gitlab-ci.yml
+
+### deploy
+!deploy/config/app_global.yaml

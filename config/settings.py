@@ -46,11 +46,18 @@ class ApiConfig:
 
 @dataclass
 class RedisConfig:
-    """Конфигурация Redis"""
+    """Конфигурация Redis подключения"""
     url: str = "redis://localhost:6379"
-    prefix: str = "fesco_cache:"
+    max_connections: int = 20
     socket_timeout: int = 5
+    socket_connect_timeout: int = 5
     retry_on_timeout: bool = True
+    decode_responses: bool = True
+    
+    # Настройки для разных namespace'ов
+    default_ttl: int = 3600
+    cache_prefix: str = "fesco_cache:"
+    binding_prefix: str = "fesco_bindings:"
     
     def __post_init__(self):
         if not self.url.startswith(("redis://", "rediss://")):
@@ -234,65 +241,6 @@ class Config:
             
         except Exception as e:
             raise ConfigError(f"Ошибка создания конфигурации: {e}")
-    
-    # @classmethod
-    # def from_env(cls) -> 'Config':
-        # """
-        # Обратная совместимость: загрузка только из переменных окружения
-        # 
-        # @deprecated: Используйте load_config() для загрузки из YAML
-        # """
-        # logging.warning("⚠️ Config.from_env() устарел, используйте load_config()")
-        # 
-      #  Создаем базовую конфигурацию
-        # config = cls()
-        # 
-      #  Загружаем токен
-        # config.auth_token = os.getenv("FESCO_TOKEN", "")
-        # if not config.auth_token:
-            # raise ConfigError("❌ Не найден FESCO_TOKEN в переменных окружения")
-        # 
-       # Применяем переопределения из переменных окружения
-        # config._apply_env_overrides()
-        # 
-        # logging.info(f"✅ Конфигурация загружена из переменных окружения")
-        # return config
-    # 
-    # def _apply_env_overrides(self) -> None:
-        # """Применение переопределений из переменных окружения"""
-        # 
-       # API переопределения
-        # if timeout := os.getenv("FESCO_TIMEOUT_SECONDS"):
-            # self.api.timeout_seconds = int(timeout)
-        # 
-        # if parallel := os.getenv("FESCO_MAX_PARALLEL"):
-            # self.api.max_parallel = int(parallel)
-        # 
-        # if base_url := os.getenv("FESCO_BASE_URL"):
-            # self.api.base_url = base_url
-        # 
-        # if token_type := os.getenv("FESCO_TOKEN_TYPE"):
-            # self.api.token_type = token_type
-        # 
-       # Cache переопределения
-        # if cache_type := os.getenv("FESCO_CACHE_TYPE"):
-            # self.cache.type = cache_type
-        # 
-        # if cache_ttl := os.getenv("FESCO_CACHE_TTL_HOURS"):
-            # self.cache.ttl_hours = float(cache_ttl)
-        # 
-        # if cache_dir := os.getenv("FESCO_CACHE_DIR"):
-            # self.cache.dir = cache_dir
-        # 
-        # if redis_url := os.getenv("REDIS_URL"):
-            # self.cache.redis.url = redis_url
-        # 
-      #  Logging переопределения
-        # if log_level := os.getenv("FESCO_LOG_LEVEL"):
-            # self.logging.level = log_level
-        # 
-        # if log_file := os.getenv("FESCO_LOG_FILE"):
-            # self.logging.file = log_file
     
     @staticmethod
     def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:

@@ -25,9 +25,13 @@ cache:
   # Redis настройки (используются только если type: "redis")
   redis:
     url: "redis://localhost:6379"
-    prefix: "fesco_cache:"
+    cache_prefix: "cache_fesco:"
+    binding_prefix: "binding_fesco:"
+    max_connections: 20
+    socket_connect_timeout: 5
     socket_timeout: 5
     retry_on_timeout: true
+    decode_responses: true
 
 # Настройки логирования
 logging:

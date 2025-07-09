@@ -13,3 +13,8 @@ __pycache__*
 
 ### deploy
 !deploy/config/app_global.yaml
+config/sosal.py
+tests/conftest.py
+tests/testing_setup_guide.txt
+tests/db/firebird_tests.py
+utils/db/database_init

@@ -1,506 +1,486 @@
 # database/__init__.py
-"""
-FESCO Container Tracking - Database Package
-===========================================
-
-Модуль для работы с базами данных. Организован по принципу "разделения ответственности":
-
-Data Flow Architecture:
-    ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-    │  Source DB      │───▶│   Processing     │───▶│   Target DB     │
-    │ (Ваша основная) │    │   (FESCO API)    │    │ (Сторонняя)     │
-    └─────────────────┘    └──────────────────┘    └─────────────────┘
-            │                        │                        │
-      DatabaseContainerSource  ContainerEvent/           ExternalDatabaseWriter
-            │                  TrackingResult                  │
-    ┌─────────────────┐                              ┌─────────────────┐
-    │   Источники     │                              │    Назначения   │
-    │   данных        │                              │    данных       │
-    └─────────────────┘                              └─────────────────┘
-
-Компоненты по назначению:
-
-    Sources (Источники данных):
-        ├── DatabaseContainerSource   # Загрузка контейнеров из вашей БД
-        ├── ContainerInfo            # Модель данных контейнера
-        └── Batch operations         # Пакетная загрузка
-
-    Writers (Назначения данных):
-        ├── ExternalDatabaseWriter   # Запись в стороннюю БД  
-        ├── TableConfig             # Конфигурация таблиц
-        ├── ColumnMapping           # Маппинг полей
-        └── Predefined configs      # Готовые конфигурации
-
-    Utilities (Утилиты):
-        ├── Connection management   # Управление подключениями
-        ├── Configuration helpers  # Помощники конфигурации
-        └── Validation tools       # Инструменты валидации
-"""
+""" FESCO Container Tracking - Database Package """
 
 # =============================================================================
-# ИМПОРТЫ - Источники данных (где берем контейнеры)
+# ИМПОРТЫ - Новая структура с приоритетом Firebird
 # =============================================================================
 
-# Основной источник контейнеров из БД
-from .container_source import DatabaseContainerSource, ContainerInfo
-
-# =============================================================================
-# ИМПОРТЫ - Назначения данных (куда пишем результаты)
-# =============================================================================
-
-# Писатель в стороннюю БД
-from .external_writer import (
-    ExternalDatabaseWriter,
-    TableConfig,
-    ColumnMapping,
-    create_shipment_table_config,
-    create_tracking_events_table_config
+# Firebird компоненты (основные для enterprise)
+from .firebird_manager import (
+    FirebirdEntityManager,
+    EntityTableConfig, 
+    EntityColumnMapping,
+    EntityStatusID,
+    ContainerInfo,
+    create_firebird_entity_manager,
+    validate_firebird_config
 )
 
-# =============================================================================
-# ИМПОРТЫ - Утилиты и вспомогательные компоненты  
-# =============================================================================
+# Generic компоненты (для совместимости и гибкости)
+# from .container_source import DatabaseContainerSource
+# from .external_writer import (
+#     ExternalDatabaseWriter,
+#     TableConfig,
+#     ColumnMapping,
+#     create_shipment_table_config,
+#     create_tracking_events_table_config
+# )
 
-# Пока в заглушках - будем добавлять по мере необходимости
-# from .connection import DatabaseConnection
-# from .migrations import MigrationManager
-
-
 # =============================================================================
-# ПУБЛИЧНЫЙ API - Что доступно при импорте database
+# ПУБЛИЧНЫЙ API - Упрощенный и логичный
 # =============================================================================
 
 __all__ = [
-    # === ИСТОЧНИКИ ДАННЫХ ===
-    'DatabaseContainerSource',      # Главный источник контейнеров
-    'ContainerInfo',                # Модель данных контейнера
+    # === FIREBIRD КОМПОНЕНТЫ (Primary) ===
+    'FirebirdEntityManager',        # Главный компонент
+    'EntityTableConfig',            # Конфигурация entity 
+    'EntityColumnMapping',          # Маппинг операций
+    'EntityStatusID',               # Статусы enum
+    'ContainerInfo',                # Модель контейнера
     
-    # === НАЗНАЧЕНИЯ ДАННЫХ ===
-    'ExternalDatabaseWriter',       # Писатель результатов
-    'TableConfig',                  # Конфигурация таблицы
-    'ColumnMapping',                # Маппинг колонок
+    # === GENERIC КОМПОНЕНТЫ (Secondary) ===
+#    'DatabaseContainerSource',      # Generic источник
+#    'ExternalDatabaseWriter',       # Generic писатель
+#    'TableConfig',                  # Generic конфигурация
+#    'ColumnMapping',                # Generic маппинг
+    
+    # === ФАБРИЧНЫЕ ФУНКЦИИ (Unified Interface) ===
+    'create_database_source',       # Универсальный источник
+    'create_database_writer',       # Универсальный писатель
+    'create_unified_config',        # Единая конфигурация
     
     # === ГОТОВЫЕ КОНФИГУРАЦИИ ===
-    'create_shipment_table_config',      # Конфиг таблицы отгрузок
-    'create_tracking_events_table_config', # Конфиг таблицы событий
-    
-    # === ФАБРИЧНЫЕ ФУНКЦИИ ===
-    'create_container_source',      # Создать источник контейнеров
-    'create_external_writer',       # Создать писатель результатов
-    'create_database_config',       # Создать конфигурацию БД
+    'create_shipment_table_config',
+    'create_tracking_events_table_config',
+    'create_firebird_entity_config',
     
     # === УТИЛИТЫ ===
-    'validate_database_config',     # Валидация конфигурации
-    'test_database_connections',    # Тестирование соединений
-    'get_database_info',           # Информация о БД компонентах
+    'validate_database_config',
+    'test_database_connections',
+    'detect_database_type',
+    'get_database_capabilities',
     
     # === ПРЕДОПРЕДЕЛЕННЫЕ КОНФИГУРАЦИИ ===
-    'COMMON_SOURCE_CONFIGS',       # Типовые конфигурации источников
-    'COMMON_TARGET_CONFIGS',       # Типовые конфигурации целей
+    'FIREBIRD_CONFIGS',
+    'MYSQL_CONFIGS', 
+    'POSTGRESQL_CONFIGS',
 ]
 
 
 # =============================================================================
-# ФАБРИЧНЫЕ ФУНКЦИИ - Удобное создание компонентов
+# УНИФИЦИРОВАННЫЕ ФАБРИЧНЫЕ ФУНКЦИИ
 # =============================================================================
 
-def create_container_source(
-    host: str,
-    user: str,
-    password: str,
-    database: str,
-    table: str = "containers",
-    container_column: str = "container_number",
-    **kwargs
-) -> DatabaseContainerSource:
+def create_database_source(
+    db_type: str = "auto",
+    **config_kwargs
+):
     """
-    Создать источник контейнеров с упрощенной конфигурацией
+    Универсальная фабрика для создания источника данных
     
-    Это функция "для ленивых" - передаете основные параметры,
-    получаете готовый к работе источник данных.
+    Автоматически определяет тип БД и создает подходящий компонент.
     
     Args:
-        host: Хост БД
-        user: Пользователь БД  
-        password: Пароль
-        database: Имя базы данных
-        table: Имя таблицы с контейнерами
-        container_column: Имя колонки с номерами контейнеров
-        **kwargs: Дополнительные параметры (port, status_column, etc.)
+        db_type: Тип БД ("firebird", "mysql", "postgresql", "auto")
+        **config_kwargs: Параметры подключения
         
     Returns:
-        DatabaseContainerSource: Готовый источник данных
+        Подходящий источник данных
+        
+    Architecture Decision:
+        🎯 Firebird-First Strategy: 
+        - Если не указан тип, сначала проверяем Firebird
+        - Firebird = enterprise reality, остальное = fallback
         
     Example:
-        >>> from database import create_container_source
-        >>> 
-        >>> source = create_container_source(
+        >>> # Автоопределение (сначала проверит Firebird)
+        >>> source = create_database_source(
         ...     host="localhost",
-        ...     user="myapp_user", 
-        ...     password="secret",
-        ...     database="shipping_db",
-        ...     table="shipment_containers",
-        ...     container_column="container_no"
+        ...     database="C:/shipping.fdb",  # .fdb = Firebird автоматически
+        ...     user="SYSDBA",
+        ...     password="masterkey"
         ... )
         >>> 
-        >>> await source.connect()
-        >>> containers = await source.get_containers_list(limit=100)
+        >>> # Принудительный выбор
+        >>> source = create_database_source(
+        ...     db_type="mysql",
+        ...     host="localhost",
+        ...     database="shipping_db",
+        ...     user="mysql_user",
+        ...     password="mysql_pass"
+        ... )
     """
     
-    config = {
-        'host': host,
-        'port': kwargs.get('port', 3306),
-        'user': user,
-        'password': password,
-        'database': database,
-        'table': table,
-        'column': container_column,
-        'status_column': kwargs.get('status_column', 'status'),
-        'priority_column': kwargs.get('priority_column', 'priority')
-    }
+    # Автоопределение типа БД
+    if db_type == "auto":
+        db_type = detect_database_type(config_kwargs)
     
-    return DatabaseContainerSource(config)
+    # Создаем источник по типу
+    if db_type == "firebird":
+        return _create_firebird_source(**config_kwargs)
+    else:
+        raise ValueError(f"Неподдерживаемый тип БД: {db_type}")
 
 
-def create_external_writer(
-    host: str,
-    user: str,
-    password: str,
-    database: str,
+def create_database_writer(
+    db_type: str = "auto", 
     table_configs: list = None,
-    **kwargs
-) -> ExternalDatabaseWriter:
+    **config_kwargs
+):
     """
-    Создать писатель в стороннюю БД с упрощенной конфигурацией
+    Универсальная фабрика для создания писателя данных
+    
+    Для Firebird использует встроенные возможности FirebirdEntityManager,
+    для остальных БД - ExternalDatabaseWriter.
     
     Args:
-        host: Хост целевой БД
-        user: Пользователь
-        password: Пароль  
-        database: Имя базы данных
-        table_configs: Список конфигураций таблиц (если None - используем стандартные)
-        **kwargs: Дополнительные параметры
+        db_type: Тип целевой БД
+        table_configs: Конфигурации таблиц
+        **config_kwargs: Параметры подключения
         
     Returns:
-        ExternalDatabaseWriter: Готовый писатель
+        Подходящий писатель данных
         
     Example:
-        >>> from database import create_external_writer
-        >>> 
-        >>> writer = create_external_writer(
-        ...     host="external-system.company.com",
-        ...     user="integration_user",
-        ...     password="integration_pass", 
-        ...     database="shipment_management"
+        >>> writer = create_database_writer(
+        ...     db_type="mysql",
+        ...     host="external-system.com",
+        ...     database="logistics_db",
+        ...     table_configs=[create_shipment_table_config()]
         ... )
-        >>> 
-        >>> await writer.connect()
     """
     
-    db_config = {
-        'host': host,
-        'port': kwargs.get('port', 3306),
-        'user': user,
-        'password': password,
-        'database': database
-    }
+    if db_type == "auto":
+        db_type = detect_database_type(config_kwargs)
     
-    # Используем стандартные конфигурации если не указаны
-    if table_configs is None:
-        table_configs = [create_shipment_table_config()]
-    
-    return ExternalDatabaseWriter(db_config, table_configs)
+    if db_type == "firebird":
+        # Для Firebird не нужен отдельный writer - используем EntityManager
+        return _create_firebird_source(**config_kwargs)  # Тот же менеджер
+    else:
+        # Для остальных БД используем generic writer
+        if table_configs is None:
+            table_configs = [create_shipment_table_config()]
+        
+#        return ExternalDatabaseWriter(config_kwargs, table_configs)
 
 
-def create_database_config(
-    source_db: dict,
-    target_db: dict,
-    table_mappings: dict = None
+def create_unified_config(
+    source_config: dict,
+    target_config: dict = None,
+    processing_rules: dict = None
 ) -> dict:
     """
-    Создать полную конфигурацию БД для системы
+    Создать единую конфигурацию для всей системы БД
     
-    Это функция "архитектора" - создает полную конфигурацию
-    для интеграции между источником и целью.
+    Объединяет конфигурации источника, цели и правил обработки
+    в единую структуру для простого управления.
     
     Args:
-        source_db: Конфигурация БД источника
-        target_db: Конфигурация целевой БД
-        table_mappings: Маппинг таблиц (опционально)
+        source_config: Конфигурация источника данных
+        target_config: Конфигурация цели (может быть None для Firebird)
+        processing_rules: Правила обработки и маппинга
         
     Returns:
-        dict: Полная конфигурация системы БД
+        Унифицированная конфигурация
         
     Example:
-        >>> config = create_database_config(
-        ...     source_db={
-        ...         'host': 'main-db.company.com',
-        ...         'database': 'shipping_system',
-        ...         'table': 'active_containers'
+        >>> unified_config = create_unified_config(
+        ...     source_config={
+        ...         'type': 'firebird',
+        ...         'host': 'localhost',
+        ...         'database': 'C:/shipping.fdb',
+        ...         'user': 'SYSDBA',
+        ...         'password': 'masterkey'
         ...     },
-        ...     target_db={
-        ...         'host': 'external-api.partner.com',
-        ...         'database': 'logistics_data'
+        ...     processing_rules={
+        ...         'batch_size': 100,
+        ...         'excluded_statuses': [8, 9, 24],  # закрыто, доставлено, отменено
+        ...         'priority_lines': [1, 2, 3]       # важные линии
         ...     }
         ... )
     """
     
+    # Определяем тип источника
+    source_type = source_config.get('type') or detect_database_type(source_config)
+    
     config = {
-        'source': source_db,
-        'target': target_db,
-        'created_at': None,  # Можно добавить timestamp
-        'version': '1.0'
+        'version': '2.0',
+        'created_at': None,  # Timestamp создания
+        'source': {
+            'type': source_type,
+            'config': source_config
+        },
+        'processing': processing_rules or {},
+        'capabilities': get_database_capabilities(source_type)
     }
     
-    if table_mappings:
-        config['table_mappings'] = table_mappings
+    # Добавляем цель если есть (для интеграций)
+    if target_config:
+        target_type = target_config.get('type') or detect_database_type(target_config)
+        config['target'] = {
+            'type': target_type,
+            'config': target_config
+        }
     
     return config
 
 
 # =============================================================================
-# УТИЛИТЫ - Валидация и диагностика
+# УТИЛИТЫ И ДИАГНОСТИКА
 # =============================================================================
+
+def detect_database_type(config: dict) -> str:
+    """
+    Автоматическое определение типа БД по конфигурации
+    
+    Firebird-First Strategy: проверяем Firebird признаки первыми.
+    
+    Detection Logic:
+        1. Явный тип в config['type']
+        2. Расширение файла БД (.fdb = Firebird)
+        3. Порт подключения (3050 = Firebird, 3306 = MySQL, 5432 = PostgreSQL)  
+        4. Имя пользователя (SYSDBA = Firebird)
+        5. Fallback = mysql
+    """
+    
+    # Явное указание типа
+    if 'type' in config:
+        return config['type'].lower()
+    
+    # По расширению файла БД
+    database = config.get('database', '')
+    if database.lower().endswith('.fdb'):
+        return 'firebird'
+    
+    # По порту
+    port = config.get('port', 0)
+    if port == 3050:
+        return 'firebird'
+    elif port == 3306:
+        return 'mysql'
+    elif port == 5432:
+        return 'postgresql'
+    
+    # По пользователю
+    user = config.get('user', '').upper()
+    if user == 'SYSDBA':
+        return 'firebird'
+    
+    # По умолчанию MySQL (наиболее распространенный)
+    return 'mysql'
+
+
+def get_database_capabilities(db_type: str) -> dict:
+    """
+    Получить возможности типа БД
+    
+    Помогает понять что доступно для каждого типа БД.
+    
+    Returns:
+        Словарь с возможностями БД
+    """
+    
+    capabilities = {
+        'firebird': {
+            'unified_manager': True,      # Есть FirebirdEntityManager
+            'read_write_same_db': True,   # Чтение и запись в одну БД
+            'transaction_support': True,  # Полные транзакции
+            'date_types': ['DATE', 'TIMESTAMP'],
+            'concurrent_connections': 'limited',  # Ограниченные
+            'enterprise_features': True,
+            'recommended_for': ['corporate_integrations', 'enterprise_systems']
+        },
+        
+        'mysql': {
+            'unified_manager': False,     # Только generic компоненты
+            'read_write_same_db': False,  # Обычно разные БД
+            'transaction_support': True,
+            'date_types': ['DATE', 'DATETIME', 'TIMESTAMP'],
+            'concurrent_connections': 'high',  # Высокая производительность
+            'enterprise_features': True,
+            'recommended_for': ['web_applications', 'microservices']
+        },
+        
+        'postgresql': {
+            'unified_manager': False,
+            'read_write_same_db': False,
+            'transaction_support': True,
+            'date_types': ['DATE', 'TIMESTAMP', 'TIMESTAMPTZ'],
+            'concurrent_connections': 'high',
+            'enterprise_features': True,
+            'recommended_for': ['analytics', 'complex_queries', 'json_data']
+        }
+    }
+    
+    return capabilities.get(db_type, {})
+
 
 async def validate_database_config(config: dict) -> dict:
     """
-    Валидация конфигурации БД
+    Универсальная валидация конфигурации БД
     
-    Проверяет корректность настроек и доступность БД.
-    
-    Args:
-        config: Конфигурация для проверки
-        
-    Returns:
-        dict: Результаты валидации
-        
-    Example:
-        >>> config = {'host': 'localhost', 'user': 'test', ...}
-        >>> result = await validate_database_config(config)
-        >>> 
-        >>> if result['valid']:
-        ...     print("✅ Конфигурация корректна")
-        >>> else:
-        ...     for error in result['errors']:
-        ...         print(f"❌ {error}")
+    Адаптируется под тип БД для специфичных проверок.
     """
     
+    db_type = detect_database_type(config)
+    
+    # Базовые проверки для всех БД
     errors = []
     warnings = []
     
-    # Проверка обязательных полей
     required_fields = ['host', 'user', 'password', 'database']
     for field in required_fields:
         if not config.get(field):
-            errors.append(f"Отсутствует обязательное поле: {field}")
+            errors.append(f"Отсутствует {field}")
     
-    # Проверка формата хоста
-    host = config.get('host', '')
-    if host and not (host.startswith(('localhost', '127.0.0.1')) or '.' in host):
-        warnings.append("Хост может быть некорректным")
+    # Специфичные проверки по типу БД
+    if db_type == 'firebird':
+        firebird_result = await validate_firebird_config(config)
+        errors.extend(firebird_result['errors'])
+        warnings.extend(firebird_result['warnings'])
     
-    # Проверка порта
-    port = config.get('port', 3306)
-    if not isinstance(port, int) or port <= 0 or port > 65535:
-        errors.append("Некорректный порт БД")
+    elif db_type == 'mysql':
+        port = config.get('port', 3306)
+        if port != 3306:
+            warnings.append(f"Нестандартный порт MySQL: {port}")
     
-    # TODO: Здесь можно добавить реальную проверку подключения
-    # try:
-    #     test_connection = await create_test_connection(config)
-    #     await test_connection.close()
-    # except Exception as e:
-    #     errors.append(f"Не удается подключиться к БД: {e}")
+    elif db_type == 'postgresql':
+        port = config.get('port', 5432)
+        if port != 5432:
+            warnings.append(f"Нестандартный порт PostgreSQL: {port}")
     
     return {
         'valid': len(errors) == 0,
+        'detected_type': db_type,
         'errors': errors,
         'warnings': warnings,
-        'config_summary': {
-            'host': config.get('host', 'not_set'),
-            'database': config.get('database', 'not_set'),
-            'has_credentials': bool(config.get('user') and config.get('password'))
-        }
+        'capabilities': get_database_capabilities(db_type)
     }
 
 
-async def test_database_connections(source_config: dict, target_config: dict) -> dict:
+async def test_database_connections(config: dict) -> dict:
     """
-    Тестирование подключений к источнику и цели
+    Тестирование подключений с автоопределением типа БД
     
-    Args:
-        source_config: Конфигурация БД источника
-        target_config: Конфигурация целевой БД
-        
     Returns:
-        dict: Результаты тестирования
+        Результаты тестирования с рекомендациями
     """
     
+    db_type = detect_database_type(config)
     results = {
-        'source': {'connected': False, 'error': None, 'latency_ms': 0},
-        'target': {'connected': False, 'error': None, 'latency_ms': 0},
-        'overall_status': 'unknown'
+        'detected_type': db_type,
+        'connection_test': {'success': False, 'error': None, 'latency_ms': 0},
+        'capabilities_test': {},
+        'recommendations': []
     }
     
-    # TODO: Реальное тестирование подключений
-    # Пока возвращаем заглушку
+    # Тестируем подключение по типу БД
+    try:
+        if db_type == 'firebird':
+            # Тестируем Firebird
+            from .firebird_manager import FirebirdConnectionManager
+            
+            connection_manager = FirebirdConnectionManager(config)
+            success = await connection_manager.test_connection()
+            
+            results['connection_test']['success'] = success
+            
+            if success:
+                results['capabilities_test'] = {
+                    'transactions': True,
+                    'concurrent_access': True,
+                    'enterprise_ready': True
+                }
+                results['recommendations'].append("✅ Firebird готов для enterprise использования")
+            
+        else:
+            # Для других БД пока заглушка
+            results['connection_test']['success'] = False
+            results['connection_test']['error'] = f"Тестирование {db_type} пока не реализовано"
+            results['recommendations'].append(f"💡 Реализуйте тестирование для {db_type}")
     
-    results['overall_status'] = 'testing_not_implemented'
+    except Exception as e:
+        results['connection_test']['error'] = str(e)
+        results['recommendations'].append(f"❌ Ошибка подключения: {e}")
     
     return results
 
 
-def get_database_info() -> dict:
+# =============================================================================
+# ВНУТРЕННИЕ ФУНКЦИИ (не в __all__)
+# =============================================================================
+
+def _create_firebird_source(**config_kwargs):
+    """Создать Firebird источник"""
+    
+    # Извлекаем параметры для FirebirdEntityManager
+    required_params = ['host', 'database', 'user', 'password']
+    firebird_config = {param: config_kwargs[param] for param in required_params}
+    
+    # Дополнительные параметры
+    entity_config = config_kwargs.get('entity_config')
+    if 'dsn' in config_kwargs:
+        firebird_config['dsn'] = config_kwargs['dsn']
+    
+    return create_firebird_entity_manager(
+        host=firebird_config['host'],
+        database=firebird_config['database'],
+        user=firebird_config['user'],
+        password=firebird_config['password'],
+        entity_config=entity_config
+    )
+
+
+
+# =============================================================================
+# ГОТОВЫЕ КОНФИГУРАЦИИ 2.0
+# =============================================================================
+
+def create_firebird_entity_config(
+    custom_mappings: dict = None,
+    excluded_statuses: set = None
+) -> EntityTableConfig:
     """
-    Получить информацию о доступных компонентах БД
-    
-    Полезно для диагностики и документации.
-    
-    Returns:
-        dict: Информация о компонентах
-    """
-    
-    return {
-        'version': '1.0.0',
-        'components': {
-            'sources': {
-                'DatabaseContainerSource': {
-                    'description': 'Источник контейнеров из реляционной БД',
-                    'supported_databases': ['MySQL', 'PostgreSQL', 'MariaDB'],
-                    'features': ['batch_loading', 'filtering', 'priority_sorting']
-                }
-            },
-            'writers': {
-                'ExternalDatabaseWriter': {
-                    'description': 'Запись результатов в стороннюю БД',
-                    'features': ['field_mapping', 'conditional_writes', 'upsert_operations'],
-                    'supported_transforms': ['upper', 'lower', 'date', 'trim', 'not_null']
-                }
-            }
-        },
-        'predefined_configs': {
-            'shipment_table': 'Конфигурация для таблицы отгрузок',
-            'tracking_events': 'Конфигурация для таблицы событий'
-        },
-        'requirements': {
-            'python_packages': ['aiomysql>=0.1.1'],
-            'database_permissions': ['SELECT (source)', 'INSERT, UPDATE (target)']
-        }
-    }
-
-
-# =============================================================================
-# ПРЕДОПРЕДЕЛЕННЫЕ КОНФИГУРАЦИИ - Готовые шаблоны
-# =============================================================================
-
-COMMON_SOURCE_CONFIGS = {
-    'mysql_localhost': {
-        'host': 'localhost',
-        'port': 3306,
-        'table': 'containers',
-        'column': 'container_number',
-        'status_column': 'status',
-        'description': 'Стандартная конфигурация для локального MySQL'
-    },
-    
-    'mysql_production': {
-        'host': '${PROD_DB_HOST}',
-        'port': 3306,
-        'user': '${PROD_DB_USER}',
-        'password': '${PROD_DB_PASSWORD}',
-        'table': 'shipment_containers',
-        'column': 'container_no',
-        'status_column': 'processing_status',
-        'description': 'Продакшен конфигурация с переменными окружения'
-    },
-    
-    'postgresql_standard': {
-        'host': 'localhost',
-        'port': 5432,
-        'table': 'logistics_containers',
-        'column': 'container_number',
-        'description': 'Стандартная конфигурация для PostgreSQL'
-    }
-}
-
-
-COMMON_TARGET_CONFIGS = {
-    'shipment_management': {
-        'tables': ['shipments', 'tracking_events'],
-        'primary_use': 'Запись в систему управления отгрузками',
-        'table_configs': 'use create_shipment_table_config()'
-    },
-    
-    'logistics_platform': {
-        'tables': ['container_tracking', 'logistics_events'],
-        'primary_use': 'Интеграция с логистической платформой',
-        'table_configs': 'use create_tracking_events_table_config()'
-    },
-    
-    'reporting_warehouse': {
-        'tables': ['fact_container_events', 'dim_containers'],
-        'primary_use': 'Запись в хранилище данных для отчетности',
-        'table_configs': 'custom configuration required'
-    }
-}
-
-
-# =============================================================================
-# КАСТОМНЫЕ КОНФИГУРАЦИИ - Примеры для разных сценариев
-# =============================================================================
-
-def create_custom_table_config(
-    table_name: str,
-    primary_key: str,
-    container_column: str,
-    field_mappings: dict
-) -> TableConfig:
-    """
-    Создать кастомную конфигурацию таблицы
-    
-    Для случаев, когда стандартные конфигурации не подходят.
+    Создать конфигурацию Firebird entity с кастомизацией
     
     Args:
-        table_name: Имя таблицы
-        primary_key: Первичный ключ
-        container_column: Колонка с номером контейнера
-        field_mappings: Словарь маппингов полей
+        custom_mappings: Дополнительные маппинги операций
+        excluded_statuses: Статусы для исключения
         
     Returns:
-        TableConfig: Кастомная конфигурация
+        Настроенная EntityTableConfig
         
     Example:
-        >>> custom_config = create_custom_table_config(
-        ...     table_name='my_custom_table',
-        ...     primary_key='id',
-        ...     container_column='container_ref',
-        ...     field_mappings={
-        ...         'status_code': {'fesco_field': 'operation', 'transform': 'upper'},
-        ...         'last_position': {'fesco_field': 'location', 'transform': 'trim'}
-        ...     }
+        >>> config = create_firebird_entity_config(
+        ...     custom_mappings={
+        ...         'DATE_CUSTOMS': EntityColumnMapping(
+        ...             entity_column='DATE_CUSTOMS',
+        ...             fesco_field='date',
+        ...             operation_patterns=('таможенное оформление', 'customs clearance'),
+        ...             priority=9
+        ...         )
+        ...     },
+        ...     excluded_statuses={8, 9, 24, 99}  # Дополнительные статусы
         ... )
     """
     
-    # Преобразуем простые маппинги в объекты ColumnMapping
-    columns = {}
-    for column_name, mapping_info in field_mappings.items():
-        columns[column_name] = ColumnMapping(
-            fesco_field=mapping_info['fesco_field'],
-            target_column=column_name,
-            transform_func=mapping_info.get('transform'),
-            condition_value=mapping_info.get('condition')
-        )
+    config = EntityTableConfig()
     
-    return TableConfig(
-        table_name=table_name,
-        primary_key=primary_key,
-        container_column=container_column,
-        columns=columns
-    )
+    # Добавляем кастомные маппинги
+    if custom_mappings:
+        config.date_mappings.update(custom_mappings)
+    
+    # Переопределяем исключенные статусы
+    if excluded_statuses:
+        config.excluded_status_ids = excluded_statuses
+    
+    return config
+
 
 
 # =============================================================================
 # МЕТАДАННЫЕ ПАКЕТА
 # =============================================================================
 
-__version__ = "1.0.0"
+__version__ = "0.0.1"
 __description__ = "Database integration components for FESCO Container Tracking"

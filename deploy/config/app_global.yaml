@@ -62,6 +62,27 @@ processing:
   prefer_container_events: true
   enable_retries: true
 
+BrokerDatabase:
+    # === НАСТРОЙКИ ENTITY ТАБЛИЦЫ ===
+  table_name: "ENTITY"
+  primary_key: "ID"
+  container_column: "NAME"
+  status_column: "SP_ENTITY_STATUS"
+  line_column: "LEGAL_PERSON_LINE_ID"
+  
+  # === КОЛОНКИ ДАТ ===
+  date_eta: "DATE_ETA"
+  date_etd: "DATE_ETD"
+  date_in: "DATE_IN"
+  date_railway_loading: "DATE_RAILWAY_LOADING"
+  date_railway_delivery: "DATE_RAILWAY_DELIVERY"
+  remaining_distance: "TRACING_DAYS"
+  
+  # === НАСТРОЙКИ ОБРАБОТКИ ===
+  excluded_status_ids: [8, 9, 24]
+  target_line_ids: 451  
+  batch_size: 100
+  max_connections: 10
 ---
 
 

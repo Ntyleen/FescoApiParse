@@ -32,7 +32,7 @@ FESCO Container Tracking System
 from main_enhanced import FescoTrackingApplication
 
 # Workflow компоненты (для продвинутых пользователей)
-from processing.workflow_coordinator import ContainerTrackingWorkflow
+from FescoApiParse.processing.ContainerTrackingEngine import ContainerTrackingWorkflow
 
 # Компоненты БД (для кастомных интеграций)
 from database.container_source import DatabaseContainerSource, ContainerInfo

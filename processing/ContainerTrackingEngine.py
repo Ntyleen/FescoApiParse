@@ -22,7 +22,7 @@ from utils.logging import get_logger
 
 
 @dataclass
-class WorkflowStats:
+class EngineStats:
     """Статистика выполнения workflow"""
     containers_loaded: int = 0
     containers_processed: int = 0
@@ -33,7 +33,7 @@ class WorkflowStats:
     records_written: int = 0
 
 
-class ContainerTrackingWorkflow:
+class ContainerTrackingEngine:
     """
     Главный координатор процесса трекинга контейнеров
     
@@ -62,7 +62,7 @@ class ContainerTrackingWorkflow:
         
         # Инициализируем компоненты
         self.stats = ProcessingStats()
-        self.workflow_stats = WorkflowStats()
+        self.workflow_stats = EngineStats()
         self.binding_manager = ContainerBindingManager(cache)
         self.event_processor = EventProcessor()
         self.api_client = FescoApiClient(config, cache, self.stats)

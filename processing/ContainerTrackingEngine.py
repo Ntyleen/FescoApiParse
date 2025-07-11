@@ -1,11 +1,10 @@
-# processing/workflow_coordinator.py
+# processing/ContainerTrackingEngine.py
 """
-Координатор workflow для полной реализации схемы canvas
-Объединяет все компоненты в единый процесс обработки
+Координатор workflow для полной реализации с прямой интеграцией Firebird
 """
 
 import asyncio
-from typing import List, Dict, Set, AsyncGenerator
+from typing import List, Dict, Set, AsyncGenerator, Optional, Union, Tuple
 import aiohttp
 from dataclasses import dataclass
 
@@ -14,8 +13,15 @@ from cache.cache_base import CacheBackend
 from api.api_client import FescoApiClient
 from processing.container_bindings import ContainerBindingManager
 from processing.events import EventProcessor
-from database.container_source import DatabaseContainerSource, ContainerInfo
-from database.external_writer import ExternalDatabaseWriter
+
+# НОВОЕ: Прямой импорт Firebird компонентов
+from utils.db.firebird_manager import (
+    FirebirdEntityManager, 
+    ContainerInfo,
+    EntityTableConfig,
+    create_firebird_entity_manager
+)
+
 from models.container_event import TrackingResult
 from models.processing_stats import ProcessingStats
 from utils.logging import get_logger
@@ -29,40 +35,34 @@ class EngineStats:
     containers_successful: int = 0
     orders_discovered: int = 0
     orders_processed: int = 0
-    api_calls_saved: int = 0  # Благодаря проверкам привязок
+    api_calls_saved: int = 0
     records_written: int = 0
+    # НОВОЕ: Firebird специфичные метрики
+    firebird_updates: int = 0
+    firebird_read_batches: int = 0
 
 
 class ContainerTrackingEngine:
     """
     Главный координатор процесса трекинга контейнеров
     
-    Реализует полную схему из canvas:
-    1. Получение контейнеров из БД
-    2. Поиск/проверка заявок  
-    3. Привязка контейнеров к заявкам
-    4. Проверка необходимости обработки
-    5. Получение данных трекинга
-    6. Сохранение в стороннюю БД
-    
-    Этот класс - как дирижер оркестра, координирующий работу всех компонентов
+    ОБНОВЛЕНО: Теперь использует единый FirebirdEntityManager
+    для чтения и записи в entity таблицу
     """
     
     def __init__(
         self,
         config: Config,
         cache: CacheBackend,
-        db_source: DatabaseContainerSource,
-        external_writer: ExternalDatabaseWriter
+        firebird_manager: FirebirdEntityManager  # ИЗМЕНЕНО: Один менеджер вместо двух
     ):
         self.config = config
         self.cache = cache
-        self.db_source = db_source
-        self.external_writer = external_writer
+        self.firebird_manager = firebird_manager  # НОВОЕ: Единый менеджер БД
         
         # Инициализируем компоненты
         self.stats = ProcessingStats()
-        self.workflow_stats = EngineStats()
+        self.engine_stats = EngineStats()  # ИЗМЕНЕНО: Переименовано из workflow_stats
         self.binding_manager = ContainerBindingManager(cache)
         self.event_processor = EventProcessor()
         self.api_client = FescoApiClient(config, cache, self.stats)
@@ -70,15 +70,20 @@ class ContainerTrackingEngine:
         # Отслеживание обработанных заявок в рамках сессии
         self.session_processed_orders: Set[str] = set()
         
-        self.logger = get_logger("fesco_tracker.workflow")
-        self.logger.info("🎼 Workflow координатор инициализирован")
+        self.logger = get_logger("fesco_tracker.engine")
+        self.logger.info("🎼 ContainerTrackingEngine инициализирован с Firebird интеграцией")
     
-    async def run_full_workflow(self, batch_size: int = 100) -> WorkflowStats:
+    async def run_full_workflow(
+        self, 
+        batch_size: int = 100,
+        target_line_ids: Optional[Set[int]] = None
+    ) -> EngineStats:
         """
         Запуск полного workflow обработки
         
         Args:
             batch_size: Размер батча для обработки контейнеров
+            target_line_ids: ID линий для фильтрации (None = все линии)
             
         Returns:
             Статистика выполнения
@@ -87,6 +92,12 @@ class ContainerTrackingEngine:
         self.logger.info("🚀 Запуск полного workflow трекинга")
         self.logger.info("="*60)
         
+        # Проверяем подключение к Firebird
+        if not await self.firebird_manager.test_connection():
+            raise RuntimeError("❌ Не удается подключиться к Firebird")
+        
+        self.logger.info("✅ Firebird подключение проверено")
+        
         # Настройка HTTP сессии для API запросов
         connector = aiohttp.TCPConnector(limit_per_host=5, keepalive_timeout=60)
         timeout = aiohttp.ClientTimeout(total=self.config.api.timeout_seconds)
@@ -94,9 +105,13 @@ class ContainerTrackingEngine:
         try:
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                 
-                # Обрабатываем контейнеры батчами
-                async for batch in self.db_source.get_containers_batch(batch_size):
+                # ИЗМЕНЕНО: Читаем контейнеры напрямую из Firebird
+                async for batch in self.firebird_manager.get_containers_for_processing(
+                    batch_size=batch_size,
+                    target_line_ids=target_line_ids
+                ):
                     await self._process_container_batch(session, batch)
+                    self.engine_stats.firebird_read_batches += 1
                 
                 # Финальная статистика
                 await self._log_final_statistics()
@@ -104,24 +119,22 @@ class ContainerTrackingEngine:
         except Exception as e:
             self.logger.error(f"❌ Критическая ошибка в workflow: {e}")
             raise
+        finally:
+            # НОВОЕ: Закрываем Firebird ресурсы
+            await self.firebird_manager.close()
         
-        return self.workflow_stats
+        return self.engine_stats
     
     async def _process_container_batch(
         self, 
         session: aiohttp.ClientSession, 
-        containers: List[ContainerInfo]
+        containers: List[ContainerInfo]  # ИЗМЕНЕНО: Теперь ContainerInfo из Firebird
     ) -> None:
         """
-        Обработка батча контейнеров согласно схеме canvas
-        
-        Здесь реализуется основная логика схемы:
-        - Проверяем привязки
-        - Группируем по заявкам
-        - Избегаем дублирующих запросов
+        Обработка батча контейнеров
         """
         
-        self.workflow_stats.containers_loaded += len(containers)
+        self.engine_stats.containers_loaded += len(containers)
         self.logger.info(f"📦 Обработка батча: {len(containers)} контейнеров")
         
         # Группируем контейнеры по заявкам для оптимизации
@@ -135,13 +148,10 @@ class ContainerTrackingEngine:
     async def _group_containers_by_orders(
         self, 
         session: aiohttp.ClientSession, 
-        containers: List[ContainerInfo]
+        containers: List[ContainerInfo]  # ИЗМЕНЕНО: ContainerInfo
     ) -> Dict[str, List[ContainerInfo]]:
         """
-        Группировка контейнеров по заявкам с реализацией логики из схемы
-        
-        Это ключевая функция - здесь происходит проверка привязок
-        и принятие решений о необходимости API запросов
+        Группировка контейнеров по заявкам
         """
         
         order_groups: Dict[str, List[ContainerInfo]] = {}
@@ -151,23 +161,22 @@ class ContainerTrackingEngine:
             
             self.logger.debug(f"🔍 Обработка контейнера: {container_number}")
             
-            # Шаг 1: Проверяем существующую привязку (из схемы)
+            # Шаг 1: Проверяем существующую привязку
             existing_order = await self.binding_manager.get_container_order(container_number)
             
             if existing_order:
                 # Контейнер уже привязан к заявке
                 self.logger.debug(f"🔗 {container_number} уже привязан к заявке {existing_order}")
                 
-                # Проверяем, не обрабатывали ли мы эту заявку в текущей сессии
                 if existing_order in self.session_processed_orders:
                     self.logger.debug(f"⏭️ Заявка {existing_order} уже обработана в сессии")
-                    self.workflow_stats.api_calls_saved += 1
+                    self.engine_stats.api_calls_saved += 1
                     continue
                 
                 order_id = existing_order
                 
             else:
-                # Шаг 2: Ищем заявку через API (из схемы)
+                # Шаг 2: Ищем заявку через API
                 self.logger.debug(f"🔍 Поиск заявки для {container_number}")
                 order_id = await self.api_client.find_order_by_container(session, container_number)
                 
@@ -177,7 +186,7 @@ class ContainerTrackingEngine:
                 
                 # Шаг 3: Привязываем контейнер к заявке
                 await self.binding_manager.bind_container_to_order(container_number, order_id)
-                self.workflow_stats.orders_discovered += 1
+                self.engine_stats.orders_discovered += 1
             
             # Добавляем в группу для обработки
             if order_id not in order_groups:
@@ -191,13 +200,10 @@ class ContainerTrackingEngine:
         self,
         session: aiohttp.ClientSession,
         order_id: str,
-        containers: List[ContainerInfo]
+        containers: List[ContainerInfo]  # ИЗМЕНЕНО: ContainerInfo
     ) -> None:
         """
         Обработка группы контейнеров одной заявки
-        
-        Здесь реализуется пакетная оптимизация - 
-        делаем минимум API запросов для максимума данных
         """
         
         container_numbers = [c.container_number for c in containers]
@@ -207,7 +213,7 @@ class ContainerTrackingEngine:
             # Получаем данные заявки одним запросом для всех контейнеров
             order_data = await self.api_client.get_order_tracking(session, order_id)
             
-            # Проверяем кэш на изменения (логика из схемы)
+            # Проверяем кэш на изменения
             cache_key = f"order_last_check:{order_id}"
             last_check_data = await self.cache.get(cache_key)
             
@@ -216,7 +222,7 @@ class ContainerTrackingEngine:
             
             if last_check_data and self._data_unchanged(last_check_data, current_order_summary):
                 self.logger.debug(f"💾 Данные заявки {order_id} не изменились")
-                self.workflow_stats.api_calls_saved += len(containers)
+                self.engine_stats.api_calls_saved += len(containers)
                 
                 # Отмечаем заявку как обработанную в сессии
                 self.session_processed_orders.add(order_id)
@@ -229,7 +235,7 @@ class ContainerTrackingEngine:
             container_tasks = []
             for container in containers:
                 task = self._process_single_container(
-                    session, container.container_number, order_id, order_data
+                    session, container, order_id, order_data  # Передаем ContainerInfo
                 )
                 container_tasks.append(task)
             
@@ -245,22 +251,35 @@ class ContainerTrackingEngine:
                 return_exceptions=True
             )
             
-            # Обрабатываем результаты
-            successful_results = []
+            # Обрабатываем результаты с явной типизацией
+            successful_results: List[Tuple[ContainerInfo, TrackingResult]] = []
             for i, result in enumerate(results):
+                # Увеличиваем счетчик обработанных в любом случае
+                self.engine_stats.containers_processed += 1
+                
                 if isinstance(result, Exception):
+                    # Это исключение - логируем и пропускаем
                     self.logger.error(f"❌ Ошибка обработки {containers[i].container_number}: {result}")
                     continue
                 
-                if result and result.success:
-                    successful_results.append(result)
-                    self.workflow_stats.containers_successful += 1
+                # Явная проверка типа для IDE
+                if not isinstance(result, TrackingResult):
+                    self.logger.error(f"❌ Неожиданный тип результата для {containers[i].container_number}: {type(result)}")
+                    continue
                 
-                self.workflow_stats.containers_processed += 1
+                # Теперь IDE точно знает, что result это TrackingResult
+                tracking_result: TrackingResult = result  # Explicit cast для IDE
+                if tracking_result.success:
+                    successful_results.append((containers[i], tracking_result))
+                    self.engine_stats.containers_successful += 1
+                else:
+                    # Результат получен, но не успешный
+                    error_msg = tracking_result.error_message or "Неизвестная ошибка"
+                    self.logger.debug(f"⚠️ Неуспешная обработка {containers[i].container_number}: {error_msg}")
             
-            # Записываем успешные результаты в стороннюю БД
+            # ИЗМЕНЕНО: Записываем результаты напрямую в Firebird
             if successful_results:
-                await self._write_results_to_external_db(successful_results)
+                await self._write_results_to_firebird(successful_results)
             
             # Обновляем кэш проверки
             await self.cache.set(cache_key, current_order_summary, ttl_seconds=3600)
@@ -268,7 +287,7 @@ class ContainerTrackingEngine:
             # Отмечаем заявку как обработанную
             await self.binding_manager.mark_order_processed(order_id)
             self.session_processed_orders.add(order_id)
-            self.workflow_stats.orders_processed += 1
+            self.engine_stats.orders_processed += 1
             
         except Exception as e:
             self.logger.error(f"❌ Ошибка обработки заявки {order_id}: {e}")
@@ -276,28 +295,29 @@ class ContainerTrackingEngine:
     async def _process_single_container(
         self,
         session: aiohttp.ClientSession,
-        container_number: str,
+        container: ContainerInfo,
         order_id: str,
         order_data: dict
     ) -> TrackingResult:
         """
         Детальная обработка одного контейнера
         
-        Использует вашу существующую логику обработки событий
+        Returns:
+            TrackingResult: Всегда возвращает TrackingResult (никогда не None)
         """
         
-        result = TrackingResult(container_number=container_number)
+        result = TrackingResult(container_number=container.container_number)
         result.order_id = order_id
         
         try:
             # Получаем детальные данные контейнера
             container_data = await self.api_client.get_container_tracking(
-                session, order_id, container_number
+                session, order_id, container.container_number
             )
             
-            # Используем ваш существующий EventProcessor
+            # Используем существующий EventProcessor
             order_events = self.event_processor.extract_order_events(
-                order_data, order_id, container_number
+                order_data, order_id, container.container_number
             )
             container_events = self.event_processor.extract_container_events(container_data)
             
@@ -318,21 +338,32 @@ class ContainerTrackingEngine:
             result.error_message = f"Processing error: {e}"
             return result
     
-    async def _write_results_to_external_db(self, results: List[TrackingResult]) -> None:
-        """Запись результатов в стороннюю БД"""
+    async def _write_results_to_firebird(
+        self, 
+        container_results: List[Tuple[ContainerInfo, TrackingResult]]
+    ) -> None:
+        """
+        НОВОЕ: Запись результатов напрямую в Firebird entity таблицу
+        """
         
         written_count = 0
-        for result in results:
+        for container_info, tracking_result in container_results:
             try:
-                success = await self.external_writer.write_tracking_result(result)
+                # КЛЮЧЕВОЕ: Используем container_info.id для обновления записи
+                success = await self.firebird_manager.update_container_from_tracking(
+                    container_info.id,  # ID записи в entity таблице
+                    tracking_result
+                )
+                
                 if success:
                     written_count += 1
+                    self.engine_stats.firebird_updates += 1
                     
             except Exception as e:
-                self.logger.error(f"❌ Ошибка записи {result.container_number}: {e}")
+                self.logger.error(f"❌ Ошибка записи {tracking_result.container_number}: {e}")
         
-        self.workflow_stats.records_written += written_count
-        self.logger.info(f"💾 Записано {written_count}/{len(results)} результатов в стороннюю БД")
+        self.engine_stats.records_written += written_count
+        self.logger.info(f"💾 Обновлено {written_count}/{len(container_results)} записей в Firebird")
     
     def _extract_order_summary(self, order_data: dict, container_numbers: List[str]) -> dict:
         """Извлечь краткую сводку заявки для проверки изменений"""
@@ -365,63 +396,88 @@ class ContainerTrackingEngine:
     async def _log_final_statistics(self) -> None:
         """Вывод финальной статистики workflow"""
         
-        # Получаем статистику записи
-        write_stats = await self.external_writer.get_write_statistics()
+        # НОВОЕ: Получаем статистику из Firebird менеджера
+        firebird_stats = await self.firebird_manager.get_entity_statistics()
         
         self.logger.info("="*60)
         self.logger.info("📊 ФИНАЛЬНАЯ СТАТИСТИКА WORKFLOW")
         self.logger.info("="*60)
-        self.logger.info(f"📦 Контейнеров загружено:     {self.workflow_stats.containers_loaded:,}")
-        self.logger.info(f"⚙️ Контейнеров обработано:    {self.workflow_stats.containers_processed:,}")
-        self.logger.info(f"✅ Успешно обработано:        {self.workflow_stats.containers_successful:,}")
-        self.logger.info(f"📋 Заявок обнаружено:         {self.workflow_stats.orders_discovered:,}")
-        self.logger.info(f"📡 Заявок обработано:         {self.workflow_stats.orders_processed:,}")
-        self.logger.info(f"⚡ API запросов сэкономлено:   {self.workflow_stats.api_calls_saved:,}")
-        self.logger.info(f"💾 Записей в стороннюю БД:    {write_stats.get('total_operations', 0):,}")
+        self.logger.info(f"📦 Контейнеров загружено:     {self.engine_stats.containers_loaded:,}")
+        self.logger.info(f"⚙️ Контейнеров обработано:    {self.engine_stats.containers_processed:,}")
+        self.logger.info(f"✅ Успешно обработано:        {self.engine_stats.containers_successful:,}")
+        self.logger.info(f"📋 Заявок обнаружено:         {self.engine_stats.orders_discovered:,}")
+        self.logger.info(f"📡 Заявок обработано:         {self.engine_stats.orders_processed:,}")
+        self.logger.info(f"⚡ API запросов сэкономлено:   {self.engine_stats.api_calls_saved:,}")
+        self.logger.info(f"🔥 Обновлений Firebird:       {self.engine_stats.firebird_updates:,}")
+        self.logger.info(f"📊 Батчей прочитано:          {self.engine_stats.firebird_read_batches:,}")
         
         # Расчет эффективности
-        if self.workflow_stats.containers_loaded > 0:
-            success_rate = (self.workflow_stats.containers_successful / self.workflow_stats.containers_loaded) * 100
+        if self.engine_stats.containers_loaded > 0:
+            success_rate = (self.engine_stats.containers_successful / self.engine_stats.containers_loaded) * 100
             self.logger.info(f"📈 Процент успеха:             {success_rate:.1f}%")
         
-        if self.workflow_stats.api_calls_saved > 0:
-            total_potential_calls = self.workflow_stats.containers_loaded * 2  # order + container запросы
-            efficiency = (self.workflow_stats.api_calls_saved / total_potential_calls) * 100
+        if self.engine_stats.api_calls_saved > 0:
+            total_potential_calls = self.engine_stats.containers_loaded * 2  # order + container запросы
+            efficiency = (self.engine_stats.api_calls_saved / total_potential_calls) * 100
             self.logger.info(f"⚡ Эффективность кэша:         {efficiency:.1f}%")
         
+        # НОВОЕ: Статистика Firebird
+        if firebird_stats:
+            runtime_stats = firebird_stats.get('runtime_stats', {})
+            if runtime_stats:
+                self.logger.info(f"🔥 Firebird операций:          {runtime_stats.get('totals', {}).get('records_updated', 0):,}")
+                
         self.logger.info("="*60)
 
 
-# Фабричная функция для удобного создания workflow
-async def create_workflow(
+# =============================================================================
+# ФАБРИЧНАЯ ФУНКЦИЯ - ОБНОВЛЕННАЯ
+# =============================================================================
+
+async def create_container_tracking_engine(
     config: Config,
     cache: CacheBackend,
-    db_source_config: dict,
-    external_db_config: dict,
-    table_configs: list
-) -> ContainerTrackingWorkflow:
+    firebird_config: Optional[dict] = None,
+    entity_config: Optional[EntityTableConfig] = None
+) -> ContainerTrackingEngine:
     """
-    Создать и инициализировать полный workflow
+    НОВОЕ: Создать и инициализировать engine с Firebird интеграцией
     
     Args:
         config: Основная конфигурация приложения
         cache: Кэш для операций
-        db_source_config: Конфигурация источника данных
-        external_db_config: Конфигурация сторонней БД
-        table_configs: Конфигурации таблиц для записи
+        firebird_config: Конфигурация Firebird (если None - берется из config)
+        entity_config: Конфигурация entity таблицы
         
     Returns:
-        Готовый к работе workflow координатор
+        Готовый к работе ContainerTrackingEngine
+        
+    Example:
+        >>> config = load_config()
+        >>> cache = create_cache()
+        >>> 
+        >>> engine = await create_container_tracking_engine(config, cache)
+        >>> stats = await engine.run_full_workflow(batch_size=100)
     """
     
-    # Создаем компоненты
-    db_source = DatabaseContainerSource(db_source_config)
-    await db_source.connect()
+    # Используем конфигурацию из основного config, если не передана отдельно
+    if firebird_config is None:
+        firebird_config = config.database.to_firebird_config()
     
-    external_writer = ExternalDatabaseWriter(external_db_config, table_configs)
-    await external_writer.connect()
+    # Создаем Firebird менеджер
+    firebird_manager = create_firebird_entity_manager(
+        host=firebird_config['host'],
+        database=firebird_config['database'],
+        user=firebird_config['user'],
+        password=firebird_config['password'],
+        entity_config=entity_config
+    )
     
-    # Создаем workflow
-    workflow = ContainerTrackingWorkflow(config, cache, db_source, external_writer)
+    # Тестируем подключение
+    if not await firebird_manager.test_connection():
+        raise RuntimeError(f"❌ Не удается подключиться к Firebird: {firebird_config['host']}")
     
-    return workflow
+    # Создаем engine
+    engine = ContainerTrackingEngine(config, cache, firebird_manager)
+    
+    return engine

@@ -4,6 +4,7 @@ output/
 ignore/
 logs/
 bckp/
+
 __pycache__*
 #### .env, configs
 *.env
@@ -18,3 +19,11 @@ tests/conftest.py
 tests/testing_setup_guide.txt
 tests/db/firebird_tests.py
 utils/db/database_init
+
+### Virtual environment\
+.venv/
+.pytest_cache/
+
+### IDE and editor files
+.vscode/
+.idea/

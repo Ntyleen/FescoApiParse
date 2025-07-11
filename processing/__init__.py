@@ -3,51 +3,66 @@
 FESCO Container Tracking - Processing Package v2.0
 =================================================
 
-Модернизированная архитектура с интеграцией Firebird и Redis Backend.
+Модернизированная архитектура с прямой интеграцией Firebird.
 
-Архитектура:
-    🎼 ContainerTrackingOrchestrator (переименованный workflow_coordinator)
-        ├── 🔥 FirebirdEntityManager - источник контейнеров + запись результатов
+Архитектура v2.0:
+    🎼 ContainerTrackingEngine (новый главный компонент)
+        ├── 🔥 FirebirdEntityManager - единый источник + запись в entity
         ├── 🌐 FescoApiClient - получение данных трекинга
-        ├── 🔗 Redis BindingNamespace - привязки контейнер→заявка
-        ├── 💾 Redis CacheNamespace - кэширование API ответов
+        ├── 🔗 ContainerBindingManager - привязки контейнер→заявка
+        ├── 💾 CacheBackend - кэширование API ответов
         └── 📈 Unified Statistics - общая статистика
 
 Ключевые улучшения v2.0:
-    ✅ Firebird-First Architecture - Firebird как основной источник и цель
-    ✅ Redis Backend - единый connection pool для кэша и привязок
-    ✅ Simplified Orchestration - упрощенная логика координации
-    ✅ Unified Statistics - единая система метрик
+    ✅ Single Source of Truth - FirebirdEntityManager для чтения и записи
+    ✅ Simplified Architecture - меньше компонентов, больше функциональности
+    ✅ Transactional Safety - ACID гарантии для операций с БД
+    ✅ Enterprise Ready - готовность к корпоративным интеграциям
     ✅ Backward Compatibility - совместимость с существующим кодом
 """
 
 # =============================================================================
-# ИМПОРТЫ - Новая структура с Firebird и Redis приоритетом
+# ИМПОРТЫ - Обновленная структура
 # =============================================================================
 
 # Классические компоненты (обратная совместимость)
 from .tracker import ContainerTracker
 from .events import EventProcessor
-
-# Новая архитектура v2.0
-from .ContainerTrackingEngine import ContainerTrackingEngine, EngineStats
 from .container_bindings import ContainerBindingManager
+
+# НОВОЕ: Импорт обновленного Engine
+from .ContainerTrackingEngine import (
+    ContainerTrackingEngine, 
+    EngineStats,
+    create_container_tracking_engine  # Фабричная функция из Engine
+)
 
 # Firebird компоненты
 try:
     from utils.db.firebird_manager import (
         FirebirdEntityManager,
         EntityTableConfig,
-        create_firebird_entity_manager
+        EntityColumnMapping,
+        EntityStatusID,
+        ContainerInfo,
+        create_firebird_entity_manager,
+        validate_firebird_config,
+        FIREBIRD_AVAILABLE
     )
-    FIREBIRD_AVAILABLE = True
 except ImportError:
     FIREBIRD_AVAILABLE = False
     FirebirdEntityManager = None
     EntityTableConfig = None
+    EntityColumnMapping = None
+    EntityStatusID = None
+    ContainerInfo = None
     create_firebird_entity_manager = None
+    validate_firebird_config = None
 
-# Redis Backend компоненты
+# Cache компоненты (file cache всегда доступен)
+from cache import create_cache
+
+# Redis Backend компоненты (опциональные)
 try:
     from utils.redis_backend import (
         create_redis_manager,
@@ -67,67 +82,74 @@ except ImportError:
 
 __all__ = [
     # === НОВАЯ АРХИТЕКТУРА V2.0 (Primary) ===
-    'ContainerTrackingEngine',  # Главный orchestrator
-    'create_orchestrator',            # Фабрика orchestrator'а
-    'create_firebird_orchestrator',   # Firebird-specific создание
+    'ContainerTrackingEngine',        # Главный engine
+    'create_tracking_engine',         # Главная фабричная функция
+    'create_firebird_engine',         # Firebird-specific создание
+    'EngineStats',                    # Статистика engine
     
     # === КЛАССИЧЕСКИЕ КОМПОНЕНТЫ (Backward Compatibility) ===
     'ContainerTracker',               # Оригинальный трекер
     'EventProcessor',                 # Обработчик событий
     'ContainerBindingManager',        # Менеджер привязок
     
+    # === FIREBIRD КОМПОНЕНТЫ ===
+    'FirebirdEntityManager',          # Если доступен
+    'EntityTableConfig',
+    'EntityColumnMapping',
+    'EntityStatusID',
+    'ContainerInfo',
+    'create_firebird_entity_manager',
+    
     # === УТИЛИТЫ И ДИАГНОСТИКА ===
     'validate_processing_environment', # Проверка готовности
     'get_processing_capabilities',     # Доступные возможности
     'create_processing_config',        # Создание конфигурации
     
-    # === СТАТИСТИКА ===
-    'EngineStats',              # Статистика orchestrator'а
-    
-    # === МИГРАЦИОННЫЕ ПОМОЩНИКИ ===
-    'create_migration_plan',          # План миграции
-    'compare_orchestrator_vs_tracker', # Сравнение подходов
+    # === КОНСТАНТЫ ===
+    'FIREBIRD_AVAILABLE',
+    'REDIS_AVAILABLE',
 ]
 
 
 # =============================================================================
-# ГЛАВНАЯ ФАБРИЧНАЯ ФУНКЦИЯ - Создание Orchestrator v2.0
+# ГЛАВНАЯ ФАБРИЧНАЯ ФУНКЦИЯ - Упрощенное API
 # =============================================================================
 
-async def create_orchestrator(
+async def create_tracking_engine(
     config,
     cache_type: str = "auto",
-    enable_firebird: bool = True,
-    enable_redis: bool = True
-) -> 'ContainerTrackingEngine':
+    firebird_config: dict = None,
+    entity_config: EntityTableConfig = None
+) -> ContainerTrackingEngine:
     """
     Создать ContainerTrackingEngine с автоматической настройкой
     
-    Эта функция - ваш "главный архитектор". Она анализирует доступные 
-    компоненты и создает оптимальную конфигурацию orchestrator'а.
+    Эта функция - ваш "главный строитель". Она собирает все компоненты
+    в единую систему, автоматически выбирая лучшие доступные технологии.
     
     Args:
         config: Главная конфигурация приложения
         cache_type: Тип кэша ("auto", "redis", "file")
-        enable_firebird: Использовать Firebird как источник данных
-        enable_redis: Использовать Redis backend
+        firebird_config: Кастомная конфигурация Firebird (опционально)
+        entity_config: Конфигурация entity таблицы (опционально)
         
     Returns:
         Полностью настроенный ContainerTrackingEngine
         
+    Raises:
+        ImportError: Если Firebird недоступен
+        ConnectionError: Если не удается подключиться к БД
+        
     Example:
-        >>> from processing import create_orchestrator
+        >>> from processing import create_tracking_engine
         >>> from config import load_config
         >>> 
         >>> config = load_config("production")
-        >>> orchestrator = await create_orchestrator(
-        ...     config,
-        ...     cache_type="redis",
-        ...     enable_firebird=True
-        ... )
+        >>> engine = await create_tracking_engine(config, cache_type="redis")
         >>> 
         >>> # Запуск полного workflow
-        >>> stats = await orchestrator.run_full_workflow()
+        >>> stats = await engine.run_full_workflow(batch_size=100)
+        >>> print(f"Обработано: {stats.containers_successful} контейнеров")
     """
     
     from utils.logging import get_logger
@@ -135,132 +157,152 @@ async def create_orchestrator(
     
     logger.info("🏗️ Создание ContainerTrackingEngine v2.0")
     
+    # === ПРОВЕРКА ДОСТУПНОСТИ FIREBIRD ===
+    if not FIREBIRD_AVAILABLE:
+        raise ImportError(
+            "❌ Firebird недоступен! Для работы нужна БД интеграция.\n"
+            "Установите: pip install firebird-driver\n"
+            "или используйте классический ContainerTracker"
+        )
+    
     # === ШАГ 1: Создание Cache Backend ===
-    cache = await _create_cache_backend(config, cache_type, enable_redis, logger)
+    cache = await _create_cache_backend(config, cache_type, logger)
     
-    # === ШАГ 2: Создание Database Source ===
-    db_source = await _create_database_source(config, enable_firebird, logger)
+    # === ШАГ 2: Подготовка Firebird конфигурации ===
+    if firebird_config is None:
+        firebird_config = _extract_firebird_config_from_main_config(config)
     
-    # === ШАГ 3: Создание External Writer ===
-    external_writer = await _create_external_writer(config, enable_firebird, logger)
-    
-    # === ШАГ 4: Создание Orchestrator ===
-    orchestrator = ContainerTrackingEngine(
-        config=config,
-        cache=cache,
-        db_source=db_source,
-        external_writer=external_writer
-    )
-    
-    logger.info("✅ ContainerTrackingEngine создан успешно")
-    return orchestrator
+    # === ШАГ 3: Использование фабричной функции из Engine ===
+    try:
+        engine = await create_container_tracking_engine(
+            config=config,
+            cache=cache,
+            firebird_config=firebird_config,
+            entity_config=entity_config
+        )
+        
+        logger.info("✅ ContainerTrackingEngine создан успешно")
+        return engine
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка создания engine: {e}")
+        raise
 
 
-async def create_firebird_orchestrator(
+async def create_firebird_engine(
     config,
-    firebird_config: dict,
-    redis_url: str = "redis://localhost:6379"
-) -> 'ContainerTrackingEngine':
+    firebird_host: str,
+    firebird_database: str,
+    firebird_user: str = "SYSDBA",
+    firebird_password: str = "",
+    redis_url: str = None,
+    entity_config: EntityTableConfig = None
+) -> ContainerTrackingEngine:
     """
-    Создать Orchestrator специально для Firebird enterprise окружения
+    Создать Engine специально для Firebird enterprise окружения
     
-    Оптимизированная версия для корпоративных интеграций с Firebird БД.
+    Упрощенная функция для быстрого создания engine с явными параметрами.
+    Идеально для production окружений где параметры задаются явно.
     
     Args:
-        config: Основная конфигурация
-        firebird_config: Конфигурация Firebird подключения
-        redis_url: URL Redis для кэширования
+        config: Основная конфигурация приложения
+        firebird_host: Хост Firebird сервера
+        firebird_database: Путь к .fdb файлу
+        firebird_user: Пользователь БД (обычно SYSDBA)
+        firebird_password: Пароль БД
+        redis_url: URL Redis для кэширования (опционально)
+        entity_config: Кастомная конфигурация entity таблицы
         
     Returns:
-        Orchestrator настроенный для Firebird
+        Engine настроенный для Firebird
         
     Example:
-        >>> firebird_config = {
-        ...     'host': '192.168.120.19',
-        ...     'database': 'D:/BrokerDB/BROKER_PROD.FDB',
-        ...     'user': 'SYSDBA',
-        ...     'password': 'production_password'
-        ... }
-        >>> 
-        >>> orchestrator = await create_firebird_orchestrator(
-        ...     config, firebird_config, "redis://prod-redis:6379"
+        >>> engine = await create_firebird_engine(
+        ...     config=load_config(),
+        ...     firebird_host="192.168.120.19",
+        ...     firebird_database="D:/BrokerDB/BROKER_PROD.FDB",
+        ...     firebird_password="production_password",
+        ...     redis_url="redis://prod-redis:6379"
         ... )
+        >>> 
+        >>> # Тестируем подключение
+        >>> if await engine.firebird_manager.test_connection():
+        ...     print("🔥 Firebird готов к работе!")
     """
     
     if not FIREBIRD_AVAILABLE:
-        raise ImportError(
-            "Firebird недоступен. Установите: pip install firebird-driver"
-        )
+        raise ImportError("Firebird недоступен. Установите: pip install firebird-driver")
     
     from utils.logging import get_logger
     logger = get_logger("processing.firebird_factory")
     
-    logger.info("🔥 Создание Firebird Orchestrator")
+    logger.info("🔥 Создание Firebird Engine")
     
-    # Создаем Firebird Entity Manager
-    entity_manager = create_firebird_entity_manager(**firebird_config)
+    # Подготавливаем конфигурацию Firebird
+    firebird_config = {
+        'host': firebird_host,
+        'database': firebird_database,
+        'user': firebird_user,
+        'password': firebird_password
+    }
     
-    # Проверяем подключение
-    if not await entity_manager.test_connection():
-        raise ConnectionError("Не удается подключиться к Firebird")
-    
-    # Создаем Redis backend если доступен
-    redis_manager = None
-    cache = None
-    
-    if REDIS_AVAILABLE:
+    # Создаем cache
+    if redis_url and REDIS_AVAILABLE:
         try:
             redis_manager = create_redis_manager(redis_url)
             cache = create_compatible_cache(redis_manager)
-            logger.info("✅ Redis backend подключен")
+            logger.info("✅ Redis cache подключен")
         except Exception as e:
-            logger.warning(f"⚠️ Redis недоступен, используем fallback: {e}")
-    
-    # Fallback на file cache если Redis недоступен
-    if not cache:
-        from cache import create_cache
+            logger.warning(f"⚠️ Redis недоступен, fallback на file cache: {e}")
+            cache = create_cache(cache_type="file", cache_dir=config.cache.dir)
+    else:
         cache = create_cache(cache_type="file", cache_dir=config.cache.dir)
+        logger.info("📁 File cache создан")
     
-    # Создаем orchestrator
-    orchestrator = ContainerTrackingEngine(
+    # Создаем engine через главную фабричную функцию
+    engine = await create_container_tracking_engine(
         config=config,
         cache=cache,
-        db_source=entity_manager,    # Firebird как источник
-        external_writer=entity_manager  # Firebird как цель (тот же объект!)
+        firebird_config=firebird_config,
+        entity_config=entity_config
     )
     
-    logger.info("🔥 Firebird Orchestrator готов к работе")
-    return orchestrator
+    logger.info("🔥 Firebird Engine готов к работе")
+    return engine
 
 
 # =============================================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ СОЗДАНИЯ КОМПОНЕНТОВ
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # =============================================================================
 
-async def _create_cache_backend(config, cache_type, enable_redis, logger):
-    """Создание cache backend с автоопределением"""
+async def _create_cache_backend(config, cache_type, logger):
+    """Создание cache backend с умным fallback"""
     
     # Автоопределение лучшего типа кэша
     if cache_type == "auto":
-        if enable_redis and REDIS_AVAILABLE:
+        if REDIS_AVAILABLE and hasattr(config.cache, 'redis') and config.cache.redis.url:
             cache_type = "redis"
+            logger.info("🚀 Автоопределение: выбран Redis cache")
         else:
             cache_type = "file"
-            logger.info("🔄 Fallback на file cache")
+            logger.info("🚀 Автоопределение: выбран File cache")
     
-    # Создание Redis cache
-    if cache_type == "redis" and REDIS_AVAILABLE:
-        try:
-            redis_manager = create_redis_manager(config.cache.redis.url)
-            cache = create_compatible_cache(redis_manager)
-            logger.info("✅ Redis cache подключен")
-            return cache
-        except Exception as e:
-            logger.warning(f"⚠️ Redis ошибка, fallback на file: {e}")
+    # Попытка создания Redis cache
+    if cache_type == "redis":
+        if not REDIS_AVAILABLE:
+            logger.warning("⚠️ Redis запрошен, но недоступен. Fallback на file cache")
             cache_type = "file"
+        else:
+            try:
+                redis_manager = create_redis_manager(config.cache.redis.url)
+                cache = create_compatible_cache(redis_manager)
+                logger.info("✅ Redis cache создан")
+                return cache
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка Redis cache, fallback на file: {e}")
+                cache_type = "file"
     
-    # Создание file cache (fallback)
-    from cache import create_cache
+    # Создание file cache (надежный fallback)
     cache = create_cache(
         cache_type="file",
         cache_dir=config.cache.dir,
@@ -269,46 +311,37 @@ async def _create_cache_backend(config, cache_type, enable_redis, logger):
     logger.info("📁 File cache создан")
     return cache
 
-
-async def _create_database_source(config, enable_firebird, logger):
-    """Создание источника данных"""
     
-    if enable_firebird and FIREBIRD_AVAILABLE:
-        try:
-            # Создаем Firebird Entity Manager как источник
-            entity_manager = create_firebird_entity_manager(
-                host=config.database.host,
-                database=config.database.database,
-                user=config.database.user,
-                password=config.database.password
-            )
+def _extract_firebird_config_from_main_config(config) -> dict:
+    """Извлечь конфигурацию Firebird из главного config"""
+    
+    try:
+        # Проверяем, есть ли в config атрибут database
+        if hasattr(config, 'database'):
+            db_config = config.database
             
-            # Проверяем подключение
-            if await entity_manager.test_connection():
-                logger.info("🔥 Firebird источник подключен")
-                return entity_manager
-            else:
-                logger.error("❌ Firebird подключение неудачно")
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка Firebird источника: {e}")
-    
-    # TODO: Fallback на generic DatabaseContainerSource
-    logger.warning("⚠️ Используется заглушка источника данных")
-    return None
-
-
-async def _create_external_writer(config, enable_firebird, logger):
-    """Создание писателя во внешнюю БД"""
-    
-    if enable_firebird and FIREBIRD_AVAILABLE:
-        # Для Firebird источник и цель могут быть одним объектом
-        logger.info("🔥 Firebird writer = тот же entity manager")
-        return None  # Будет тот же объект что и db_source
-    
-    # TODO: Создание ExternalDatabaseWriter для других БД
-    logger.warning("⚠️ Используется заглушка external writer")
-    return None
+            # Проверяем, есть ли метод to_firebird_config
+            if hasattr(db_config, 'to_firebird_config'):
+                return db_config.to_firebird_config()
+            
+            # Иначе пытаемся извлечь вручную
+            return {
+                'host': getattr(db_config, 'host', 'localhost'),
+                'database': getattr(db_config, 'database', ''),
+                'user': getattr(db_config, 'user', 'SYSDBA'),
+                'password': getattr(db_config, 'password', '')
+            }
+        
+        # Fallback - минимальная конфигурация
+        return {
+            'host': 'localhost',
+            'database': '',
+            'user': 'SYSDBA',
+            'password': ''
+        }
+        
+    except Exception as e:
+        raise ValueError(f"Не удается извлечь Firebird конфигурацию: {e}")
 
 
 # =============================================================================
@@ -319,179 +352,227 @@ def validate_processing_environment() -> dict:
     """
     Проверить готовность processing окружения
     
+    Эта функция - ваш "доктор системы". Она проверяет все критически
+    важные компоненты и дает рекомендации по их улучшению.
+    
     Returns:
         Подробный отчет о готовности компонентов
+        
+    Example:
+        >>> from processing import validate_processing_environment
+        >>> 
+        >>> report = validate_processing_environment()
+        >>> if report['ready']:
+        ...     print("✅ Система готова к работе")
+        ... else:
+        ...     for issue in report['missing_components']:
+        ...         print(f"❌ Отсутствует: {issue}")
     """
     
     report = {
         'ready': True,
         'components': {},
         'recommendations': [],
-        'missing_components': []
+        'missing_components': [],
+        'warnings': []
     }
     
-    # Проверка Firebird
+    # === ПРОВЕРКА FIREBIRD ===
     report['components']['firebird'] = {
         'available': FIREBIRD_AVAILABLE,
-        'status': '✅ Готов' if FIREBIRD_AVAILABLE else '❌ Не установлен'
+        'status': '✅ Готов к enterprise интеграции' if FIREBIRD_AVAILABLE else '❌ Критически важный компонент отсутствует',
+        'description': 'Основная БД для чтения контейнеров и записи результатов'
     }
     
     if not FIREBIRD_AVAILABLE:
         report['ready'] = False
         report['missing_components'].append('firebird-driver')
-        report['recommendations'].append('Установите: pip install firebird-driver')
+        report['recommendations'].append('КРИТИЧНО: Установите pip install firebird-driver')
     
-    # Проверка Redis
+    # === ПРОВЕРКА REDIS ===
     report['components']['redis'] = {
         'available': REDIS_AVAILABLE,
-        'status': '✅ Готов' if REDIS_AVAILABLE else '⚠️ Fallback на file cache'
+        'status': '✅ Доступен для высокопроизводительного кэширования' if REDIS_AVAILABLE else '⚠️ Будет использован file cache',
+        'description': 'Опциональный компонент для улучшения производительности'
     }
     
     if not REDIS_AVAILABLE:
+        report['warnings'].append('Redis недоступен - производительность может быть ниже')
         report['recommendations'].append('Рекомендуется: pip install redis[hiredis]')
     
-    # Проверка классических компонентов
-    report['components']['classic_tracker'] = {
+    # === ПРОВЕРКА КЛАССИЧЕСКИХ КОМПОНЕНТОВ ===
+    report['components']['backward_compatibility'] = {
         'available': True,
-        'status': '✅ Обратная совместимость'
+        'status': '✅ Полная обратная совместимость',
+        'description': 'Классические компоненты для миграции'
     }
+    
+    # === ОБЩАЯ ОЦЕНКА ===
+    if report['ready']:
+        report['overall_status'] = '🚀 Система полностью готова к enterprise использованию'
+    else:
+        report['overall_status'] = '⚠️ Требуются критически важные компоненты'
     
     return report
 
 
 def get_processing_capabilities() -> dict:
-    """Получить доступные возможности processing модуля"""
+    """
+    Получить детальную информацию о возможностях processing модуля
     
-    return {
-        'orchestration_v2': {
-            'available': True,
-            'features': [
-                'Централизованная координация workflow',
-                'Оптимизация API запросов',
-                'Batch обработка контейнеров',
-                'Unified статистика'
-            ]
+    Returns:
+        Подробное описание всех доступных возможностей
+    """
+    
+    capabilities = {
+        'architecture_version': '2.0',
+        'primary_approach': 'Firebird-First Enterprise Integration',
+        
+        'engines': {
+            'container_tracking_engine': {
+                'available': FIREBIRD_AVAILABLE,
+                'recommended': True,
+                'features': [
+                    'Unified Firebird чтение/запись',
+                    'Оптимизация API запросов через группировку заявок',
+                    'Транзакционная безопасность (ACID)',
+                    'Enterprise статистика и мониторинг',
+                    'Batch обработка с умной фильтрацией',
+                    'Автоматическая дедупликация событий'
+                ] if FIREBIRD_AVAILABLE else ['Недоступен - требуется firebird-driver']
+            },
+            
+            'classic_tracker': {
+                'available': True,
+                'recommended': False,
+                'features': [
+                    'Простая параллельная обработка',
+                    'Работа только с API данными',
+                    'Backward compatibility',
+                    'Подходит для простых задач'
+                ],
+                'limitations': [
+                    'Нет интеграции с БД',
+                    'Ограниченная оптимизация',
+                    'Нет enterprise функций'
+                ]
+            }
         },
-        'firebird_integration': {
-            'available': FIREBIRD_AVAILABLE,
-            'features': [
-                'Чтение контейнеров из entity таблицы',
-                'Обновление дат после трекинга',
-                'Транзакционная безопасность',
-                'Enterprise статистика'
-            ] if FIREBIRD_AVAILABLE else []
+        
+        'database_integration': {
+            'firebird': {
+                'available': FIREBIRD_AVAILABLE,
+                'role': 'Primary database for enterprise integrations',
+                'capabilities': [
+                    'Чтение контейнеров из entity таблицы',
+                    'Умная фильтрация по статусам и линиям',
+                    'Обновление дат трекинга в реальном времени',
+                    'Статистика и аналитика',
+                    'Connection pooling и resource management'
+                ] if FIREBIRD_AVAILABLE else []
+            }
         },
-        'redis_backend': {
-            'available': REDIS_AVAILABLE,
-            'features': [
-                'Единый connection pool',
-                'Namespace изоляция',
-                'Высокопроизводительное кэширование',
-                'Распределенные привязки'
-            ] if REDIS_AVAILABLE else []
-        },
-        'backward_compatibility': {
-            'available': True,
-            'features': [
-                'ContainerTracker (классический)',
-                'EventProcessor', 
-                'Существующие конфигурации',
-                'Постепенная миграция'
-            ]
+        
+        'caching_strategies': {
+            'redis': {
+                'available': REDIS_AVAILABLE,
+                'performance': 'High',
+                'features': [
+                    'Единый connection pool',
+                    'Namespace изоляция',
+                    'Распределенное кэширование',
+                    'Высокая пропускная способность'
+                ] if REDIS_AVAILABLE else []
+            },
+            'file': {
+                'available': True,
+                'performance': 'Medium',
+                'features': [
+                    'Простота настройки',
+                    'Отсутствие внешних зависимостей',
+                    'Надежность на одной машине'
+                ]
+            }
         }
     }
-
-
-# =============================================================================
-# МИГРАЦИОННЫЕ ПОМОЩНИКИ
-# =============================================================================
-
-def create_migration_plan() -> dict:
-    """Создать план миграции на v2.0 архитектуру"""
     
-    return {
-        'migration_approach': 'Постепенная миграция с обратной совместимостью',
-        'phases': [
-            {
-                'phase': 1,
-                'title': 'Подготовка инфраструктуры',
-                'tasks': [
-                    'Установить firebird-driver',
-                    'Настроить Redis (опционально)',
-                    'Обновить конфигурации',
-                    'Провести validate_processing_environment()'
-                ]
-            },
-            {
-                'phase': 2,
-                'title': 'Создание Orchestrator',
-                'tasks': [
-                    'Использовать create_orchestrator() или create_firebird_orchestrator()',
-                    'Протестировать на небольшом наборе контейнеров',
-                    'Сравнить производительность с классическим трекером'
-                ]
-            },
-            {
-                'phase': 3,
-                'title': 'Постепенное переключение',
-                'tasks': [
-                    'Переводить процессы на orchestrator по одному',
-                    'Мониторить метрики и ошибки',
-                    'Оптимизировать производительность'
-                ]
-            }
-        ],
-        'rollback_strategy': 'Классические компоненты остаются доступными',
-        'testing_approach': 'A/B тестирование orchestrator vs tracker'
+    return capabilities
+
+
+def create_processing_config(environment: str = "development") -> dict:
+    """
+    Создать рекомендуемую конфигурацию для processing модуля
+    
+    Args:
+        environment: Тип окружения ("development", "production", "testing")
+        
+    Returns:
+        Рекомендуемая конфигурация
+    """
+    
+    base_config = {
+        'version': '2.0',
+        'architecture': 'firebird_first',
+        'environment': environment
     }
-
-
-def compare_orchestrator_vs_tracker(container_count: int = 100) -> dict:
-    """Сравнить новый orchestrator с классическим tracker"""
     
-    return {
-        'comparison_criteria': {
-            'performance': {
-                'orchestrator': 'Оптимизация через группировку заявок',
-                'tracker': 'Простая параллельная обработка'
+    if environment == "development":
+        base_config.update({
+            'cache_type': 'file',
+            'batch_size': 10,
+            'firebird': {
+                'host': 'localhost',
+                'user': 'SYSDBA',
+                'max_connections': 5
             },
-            'api_efficiency': {
-                'orchestrator': 'Минимизация дублирующих запросов',
-                'tracker': 'Один запрос = один контейнер'
+            'logging_level': 'DEBUG'
+        })
+        
+    elif environment == "production":
+        base_config.update({
+            'cache_type': 'redis' if REDIS_AVAILABLE else 'file',
+            'batch_size': 100,
+            'firebird': {
+                'host': '192.168.120.19',
+                'user': 'SYSDBA',
+                'max_connections': 20
             },
-            'database_integration': {
-                'orchestrator': 'Нативная интеграция с Firebird',
-                'tracker': 'Только API данные'
+            'logging_level': 'INFO'
+        })
+        
+    elif environment == "testing":
+        base_config.update({
+            'cache_type': 'file',
+            'batch_size': 5,
+            'firebird': {
+                'host': 'localhost',
+                'user': 'SYSDBA',
+                'max_connections': 2
             },
-            'monitoring': {
-                'orchestrator': 'Централизованная статистика workflow',
-                'tracker': 'Статистика API запросов'
-            }
-        },
-        'use_cases': {
-            'orchestrator_better': [
-                'Корпоративные интеграции с БД',
-                'Большие объемы данных (>1000 контейнеров)',
-                'Требования к оптимизации API',
-                'Сложные workflow с несколькими этапами'
-            ],
-            'tracker_better': [
-                'Простые разовые задачи',
-                'Малые объемы данных (<100 контейнеров)',
-                'Быстрые прототипы',
-                'Существующие интеграции'
-            ]
-        },
-        'recommendation': (
-            f"Для {container_count} контейнеров рекомендуется: "
-            f"{'Orchestrator' if container_count > 100 else 'Tracker'}"
+            'logging_level': 'WARNING'
+        })
+    
+    return base_config
+
+
+
+# =============================================================================
+# МЕТАДАННЫЕ И СОВМЕСТИМОСТЬ
+# =============================================================================
+
+__version__ = "0.0.1"
+__description__ = "Processing components with Firebird-First architecture"
+
+# =============================================================================
+# БЫСТРАЯ ПРОВЕРКА ГОТОВНОСТИ ПРИ ИМПОРТЕ
+# =============================================================================
+
+if __debug__:  # Только в debug режиме
+    _startup_check = validate_processing_environment()
+    if not _startup_check['ready']:
+        import warnings
+        warnings.warn(
+            f"⚠️ Processing environment не полностью готов: "
+            f"{', '.join(_startup_check['missing_components'])}",
+            ImportWarning
         )
-    }
-
-
-# =============================================================================
-# МЕТАДАННЫЕ
-# =============================================================================
-
-__version__ = "2.0.0"
-__description__ = "Processing components v2.0 with Firebird and Redis integration"

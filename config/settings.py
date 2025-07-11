@@ -9,11 +9,13 @@ import yaml
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union, TypeVar, Generic
 from datetime import datetime
 import re
 
 from dotenv import load_dotenv
+
+ConfigValue = Union[str, int, float, bool, None, Dict[str, Any], List[Any]]
 
 # Загружаем .env файл для секретов
 load_dotenv(dotenv_path='E:/Repositories/FescoApiParse/deploy/.env/local.env')
@@ -94,7 +96,7 @@ class FirebirdDatabaseConfig:
     
     # === НАСТРОЙКИ ОБРАБОТКИ ===
     excluded_status_ids: List[int] = field(default_factory=lambda: [8, 9, 24])  # закрыто, доставлено, отменено
-    target_line_ids: List[int] = field(default_factory=451)  # Если пусто - все линии
+    target_line_ids: List[int] = field(default=[451])  # Если пусто - все линии
     batch_size: int = 100
     max_connections: int = 10
     
@@ -207,6 +209,65 @@ class ProcessingConfig:
             raise ConfigError("pause_between_batches не может быть отрицательным")
 
 
+class EnvironmentSubstitutor:
+    """
+    Отдельный класс для подстановки переменных окружения.
+    """
+    
+    def __init__(self):
+        # Компилируем regex один раз для производительности
+        self._env_pattern = re.compile(r'\$\{([^}]+)\}')
+    
+    def _replace_env_variables(self, text: str) -> str:
+        """Заменяет переменные окружения в строке"""
+        def replace_var(match):
+            var_name = match.group(1)
+            env_value = os.getenv(var_name)
+            if env_value is None:
+                logging.warning(f"⚠️ Переменная окружения {var_name} не найдена")
+                return match.group(0)  # Возвращаем исходное значение
+            return env_value
+        
+        return self._env_pattern.sub(replace_var, text)
+    
+    def substitute_in_value(self, value: ConfigValue) -> ConfigValue:
+        """
+        Подстановка переменных в произвольном значении конфигурации
+        
+        Сохраняет структуру и типы данных
+        """
+        if isinstance(value, str):
+            return self._replace_env_variables(value)
+        elif isinstance(value, dict):
+            return self.substitute_in_dict(value)
+        elif isinstance(value, list):
+            return self.substitute_in_list(value)
+        else:
+            # Примитивные типы (int, bool, None) возвращаем как есть
+            return value
+    
+    def substitute_in_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Подстановка переменных в словаре
+        
+        Четкий контракт: Dict -> Dict
+        """
+        return {
+            key: self.substitute_in_value(value) 
+            for key, value in data.items()
+        }
+    
+    def substitute_in_list(self, data: List[Any]) -> List[Any]:
+        """
+        Подстановка переменных в списке
+        
+        Четкий контракт: List -> List
+        """
+        return [
+            self.substitute_in_value(item) 
+            for item in data
+        ]
+
 @dataclass
 class Config:
     """
@@ -302,7 +363,7 @@ class Config:
             # Применение дополнительных переопределений из .env
             config.database.password = os.getenv("DB_PASSWORD", config.database.password)
             config.database.user = os.getenv("DB_USER", config.database.user)
-            config.database.port = os.getenv("DB_PORT", config.database.port)
+            config.database.port = int(os.getenv('DB_PORT', config.database.port))
             
             logging.info(f"✅ Конфигурация загружена для окружения: {environment}")
             logging.info(f"✅ Токен загружен: {config.auth_token[:10]}...")
@@ -330,33 +391,18 @@ class Config:
     
     @staticmethod
     def _substitute_env_vars(config: Dict[str, Any]) -> Dict[str, Any]:
-        """Рекурсивная подстановка переменных окружения в формате ${VAR_NAME}"""
+        """
+        Подстановка переменных окружения в конфигурации
         
-        def substitute_value(value):
-            if isinstance(value, str):
-                # Поиск и замена переменных окружения
-                pattern = re.compile(r'\$\{([^}]+)\}')
-                
-                def replace_var(match):
-                    var_name = match.group(1)
-                    env_value = os.getenv(var_name)
-                    if env_value is None:
-                        logging.warning(f"⚠️ Переменная окружения {var_name} не найдена")
-                        return match.group(0)  # Возвращаем исходное значение
-                    return env_value
-                
-                return pattern.sub(replace_var, value)
-            
-            elif isinstance(value, dict):
-                return {k: substitute_value(v) for k, v in value.items()}
-            
-            elif isinstance(value, list):
-                return [substitute_value(item) for item in value]
-            
-            else:
-                return value
+        Теперь это простая функция-оркестратор с понятной логикой:
+        1. Создаем специализированный инструмент
+        2. Используем его метод с четким контрактом Dict -> Dict
+        3. Возвращаем результат
         
-        return substitute_value(config)
+        Никаких неожиданностей, никаких нарушений контракта!
+        """
+        substitutor = EnvironmentSubstitutor()
+        return substitutor.substitute_in_dict(config)
     
     @classmethod
     def _create_from_dict(cls, config_dict: Dict[str, Any]) -> 'Config':
@@ -394,23 +440,40 @@ class Config:
     def to_dict(self) -> Dict[str, Any]:
         """Преобразование конфигурации в словарь (для отладки)"""
         import dataclasses
+        from typing import Any, Dict, Union
         
-        def convert_dataclass(obj):
+        def convert_dataclass(obj: Any) -> Any:
+            """Рекурсивное преобразование dataclass в словарь"""
             if dataclasses.is_dataclass(obj):
                 result = {}
                 for field in dataclasses.fields(obj):
                     value = getattr(obj, field.name)
                     result[field.name] = convert_dataclass(value)
                 return result
-            return obj
+            elif isinstance(obj, (list, tuple)):
+                # Обрабатываем списки и кортежи
+                return [convert_dataclass(item) for item in obj]
+            elif isinstance(obj, dict):
+                # Обрабатываем обычные словари
+                return {k: convert_dataclass(v) for k, v in obj.items()}
+            else:
+                # Для простых типов (str, int, bool, None) возвращаем как есть
+                return obj
         
-        result = convert_dataclass(self)
+        # Гарантированно получаем словарь, так как self - это dataclass
+        result: Dict[str, Any] = convert_dataclass(self)
+        
+        # Теперь безопасно работаем со словарем
         # Скрываем секретные данные
-        result["auth_token"] = "***"
-        if "database" in result:
+        if "auth_token" in result:
+            result["auth_token"] = "***"
+        
+        if "database" in result and isinstance(result["database"], dict):
             result["database"]["password"] = "***"
-        if "external_database" in result:
+        
+        if "external_database" in result and isinstance(result["external_database"], dict):
             result["external_database"]["password"] = "***"
+            
         return result
 
 

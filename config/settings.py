@@ -104,6 +104,7 @@ class FirebirdDatabaseConfig:
     custom_date_mappings: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     
     def __post_init__(self):
+        self.port = int(self.port)  # Приводим порт к int
         """Валидация Firebird конфигурации"""
         if not self.host:
             raise ConfigError("Firebird host не может быть пустым")

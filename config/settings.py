@@ -139,7 +139,9 @@ class CacheConfig:
     ttl_hours: float = 1.0
     dir: str = "./FescoApiParse/cache/"
     redis: RedisConfig = field(default_factory=RedisConfig)
-    
+    cache_prefix: str = "cache_fesco:"
+    binding_prefix: str = "bindings_fesco:"
+
     def __post_init__(self):
         if self.type not in ("file", "redis"):
             raise ConfigError(f"Неподдерживаемый тип кэша: {self.type}")

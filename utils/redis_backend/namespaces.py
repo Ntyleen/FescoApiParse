@@ -1,4 +1,4 @@
-from utils import logging
+from utils.logging import get_logger
 from redis_manager import RedisManager, RedisConfig
 from abc import ABC
 from typing import Dict, Any, Optional, List
@@ -17,7 +17,7 @@ class RedisNamespace(ABC):
         self.manager = manager
         self.prefix = prefix
         self.default_ttl= RedisConfig.default_ttl * 3600
-        self.logger = logging.get_logger(f"redis.{prefix.rstrip(':')}")
+        self.logger = get_logger(f"redis.{prefix.rstrip(':')}")
     
     def _make_key(self, key: str) -> str:
         """Создать полный ключ с префиксом namespace'а"""

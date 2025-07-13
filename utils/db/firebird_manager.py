@@ -212,7 +212,7 @@ class EntityTableConfig:
             self.date_eta: EntityColumnMapping(
                 entity_column=self.date_eta,
                 fesco_field="date",
-                operation_patterns=("Грузится на фидер"),
+                operation_patterns=("Грузится на фидер"), # type: ignore
                 priority=10,
                 description="Estimated Time of Arrival",
                 column_datatype="DATE"
@@ -221,7 +221,7 @@ class EntityTableConfig:
             self.date_etd: EntityColumnMapping(
                 entity_column=self.date_etd,
                 fesco_field="date",
-                operation_patterns=("Выгружается груженным"),
+                operation_patterns=("Выгружается груженным"), # type: ignore
                 priority=10,
                 description="Estimated Time of Departure",
                 column_datatype="DATE"
@@ -230,7 +230,7 @@ class EntityTableConfig:
             self.date_in: EntityColumnMapping(
                 entity_column=self.date_in,
                 fesco_field="date",
-                operation_patterns=("Прием с моря"),
+                operation_patterns=("Прием с моря"), # type: ignore
                 priority=8,
                 description="Выгрузка на терминал",
                 column_datatype="TIMESTAMP"
@@ -239,7 +239,7 @@ class EntityTableConfig:
             self.date_railway_loading: EntityColumnMapping(
                 entity_column=self.date_railway_loading,
                 fesco_field="date",
-                operation_patterns=("Отправление вагона со станции"),
+                operation_patterns=("Отправление вагона со станции"), # type: ignore
                 priority=8,
                 description="Отгрузка на платформу",
                 column_datatype="DATE"
@@ -248,7 +248,7 @@ class EntityTableConfig:
             self.date_railway_delivery: EntityColumnMapping(
                 entity_column=self.date_railway_delivery,
                 fesco_field="date",
-                operation_patterns=("Добавлен в поручение на отгрузку на ЖД"),
+                operation_patterns=("Добавлен в поручение на отгрузку на ЖД"), # type: ignore
                 priority=8,
                 description="Сдача на ж/д",
                 column_datatype="DATE"
@@ -361,6 +361,7 @@ class FirebirdConnectionManager:
                 dsn = f"{host}:{database}"
             
             connection = fdb.connect(
+                database=self.config['database'],
                 dsn=dsn,
                 user=self.config['user'],
                 password=self.config['password'],
@@ -936,7 +937,7 @@ class FirebirdEntityManager:
         
         # Находим подходящий маппинг
         operation = tracking_result.last_event.operation
-        date_mapping = self.operation_matcher.find_best_mapping(operation)
+        date_mapping = self.operation_matcher.find_best_mapping(operation) # type: ignore
         
         if not date_mapping:
             self.logger.debug(f"🤷 Не найден маппинг для операции: {operation}")
@@ -959,7 +960,7 @@ class FirebirdEntityManager:
                 success = await loop.run_in_executor(thread_pool, _update_sync)
                 
                 if success:
-                    self.stats.record_update_success(date_mapping.entity_column, operation)
+                    self.stats.record_update_success(date_mapping.entity_column, operation) # type: ignore
                 else:
                     self.stats.record_update_failure()
                 
@@ -1144,6 +1145,8 @@ class FirebirdEntityManager:
             self._thread_pool = None
             self.logger.info("🔥 Thread pool закрыт")
 
+        if hasattr(self, 'connection_manager') and hasattr(self.connection_manager, 'close'):
+            await self.connection_manager.close()
 
 # =============================================================================
 # ФАБРИЧНЫЕ ФУНКЦИИ

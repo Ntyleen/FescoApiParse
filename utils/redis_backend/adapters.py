@@ -1,6 +1,6 @@
-from utils.logging import logging
+from utils.logging import get_logger
 from typing import Dict, Any, Optional, List
-from redis_manager import RedisManager
+from .redis_manager import RedisManager
 
 
 class RedisBackedCache:
@@ -41,7 +41,7 @@ class RedisBackedBindingManager:
     
     def __init__(self, redis_manager: RedisManager):
         self.binding_namespace = redis_manager.get_binding_namespace()
-        self.logger = logging.get_logger("redis.binding_adapter")
+        self.logger = get_logger("redis.binding_adapter")
     
     async def bind_container_to_order(self, container_number: str, order_id: str) -> bool:
         return await self.binding_namespace.bind_container_to_order(container_number, order_id)

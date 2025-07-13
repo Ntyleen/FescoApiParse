@@ -49,7 +49,7 @@ except ImportError as e:
 # ИМПОРТЫ КОМПОНЕНТОВ (с graceful degradation)
 # =============================================================================
 
-if REDIS_AVAILABLE:
+# if REDIS_AVAILABLE:
     # Импортируем основные компоненты только если Redis доступен
     from .redis_manager import RedisManager, RedisConfig
     from .namespaces import CacheNamespace, BindingNamespace

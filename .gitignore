@@ -27,3 +27,7 @@ utils/db/database_init
 ### IDE and editor files
 .vscode/
 .idea/
+deep_stack_trace_debug.py
+int_conversion_debug.py
+test_redis.py
+utils/redis_backend/fixed_redis_manager_complete.py

@@ -1,6 +1,7 @@
 from utils.logging import get_logger
-from typing import Dict, Any, Optional, List
-from .redis_manager import RedisManager
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
+if TYPE_CHECKING:
+    from .redis_manager import RedisManager
 
 
 class RedisBackedCache:

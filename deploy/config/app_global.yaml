@@ -16,7 +16,7 @@ api:
 
 # Настройки кэширования
 cache:
-  type: "Redis"  # "file" или "redis"
+  type: "redis"  # "file" или "redis"
   ttl_hours: 1
   
   # Файловый кэш

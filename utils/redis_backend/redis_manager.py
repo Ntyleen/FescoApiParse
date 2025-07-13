@@ -16,7 +16,7 @@ Unified Redis Backend for FESCO Container Tracking
 
 import asyncio
 import json
-from utils.logging import logging
+from utils.logging import get_logger
 from typing import Dict, Any, Optional, List, Union
 from namespaces import RedisNamespace, BindingNamespace, CacheNamespace
 
@@ -26,11 +26,11 @@ import redis
 from config.settings import RedisConfig
 
 try:
-    import redis.asyncio as redis
+    import redis.asyncio as redis_async
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
-    redis = None
+    redis_async = None
 
 
 
@@ -48,18 +48,18 @@ class RedisManager:
             raise ImportError("Redis не установлен. Установите: pip install redis[hiredis]")
         
         self.config = config
-        self._client: Optional[redis.Redis] = None
-        self.logger = logging.get_logger("redis.manager")
+        self._client: Optional[redis_async.Redis] = None
+        self.logger = get_logger("redis.manager")
         
         # Кэш namespace'ов для переиспользования
         self._namespaces: Dict[str, RedisNamespace] = {}
         
         self.logger.info(f"RedisManager configured: {config.url}")
     
-    async def get_client(self) -> redis.Redis:
+    async def get_client(self) -> redis_async.Redis:
         """Получить Redis клиент (ленивая инициализация)"""
         if not self._client:
-            self._client = redis.from_url(
+            self._client = redis_async.from_url(
                 self.config.url,
                 max_connections=self.config.max_connections,
                 socket_timeout=self.config.socket_timeout,
@@ -132,7 +132,7 @@ class RedisManager:
 def create_redis_manager(
     redis_url: str = "redis://localhost:6379",
     **kwargs
-) -> RedisManager:
+) -> Optional[RedisManager]:
     """
     Создать Redis менеджер с упрощенной конфигурацией
     

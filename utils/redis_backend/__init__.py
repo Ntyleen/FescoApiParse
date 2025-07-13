@@ -29,7 +29,7 @@ Redis Backend for FESCO Container Tracking
     - Планируете масштабировать использование Redis
 """
 
-from utils.logging import logging
+from utils.logging import get_logger
 from typing import Optional, Dict, Any
 
 # =============================================================================
@@ -37,12 +37,12 @@ from typing import Optional, Dict, Any
 # =============================================================================
 
 try:
-    import redis.asyncio as redis
+    import redis.asyncio as redis_async
     REDIS_AVAILABLE = True
     _redis_import_error = None
 except ImportError as e:
     REDIS_AVAILABLE = False
-    redis = None
+    redis_async = None
     _redis_import_error = str(e)
 
 # =============================================================================
@@ -118,7 +118,7 @@ def check_redis_availability() -> Dict[str, Any]:
     if REDIS_AVAILABLE:
         return {
             'available': True,
-            'redis_version': getattr(redis, '__version__', 'unknown'),
+            'redis_version': getattr(redis_async, '__version__', 'unknown'),
             'message': 'Redis client успешно импортирован',
             'components_ready': True,
             'recommendation': 'Можно использовать все функции Redis backend'
@@ -182,7 +182,7 @@ def create_redis_manager(
     """
     
     if not REDIS_AVAILABLE:
-        logger = logging.get_logger("redis_backend.factory")
+        logger = get_logger("redis_backend.factory")
         logger.error(
             "❌ Не удается создать RedisManager: Redis недоступен. "
             f"Причина: {_redis_import_error}"
@@ -200,13 +200,13 @@ def create_redis_manager(
         # Создаем и возвращаем менеджер
         manager = RedisManager(config)
         
-        logger = logging.get_logger("redis_backend.factory")
+        logger = get_logger("redis_backend.factory")
         logger.info(f"✅ RedisManager создан: {redis_url}")
         
         return manager
         
     except Exception as e:
-        logger = logging.get_logger("redis_backend.factory")
+        logger = get_logger("redis_backend.factory")
         logger.error(f"❌ Ошибка создания RedisManager: {e}")
         return None
 
@@ -240,7 +240,7 @@ def create_compatible_cache(redis_manager: 'RedisManager') -> Optional['RedisBac
     try:
         return RedisBackedCache(redis_manager)
     except Exception as e:
-        logger = logging.getLogger("redis_backend.factory")
+        logger = get_logger("redis_backend.factory")
         logger.error(f"❌ Ошибка создания совместимого кэша: {e}")
         return None
 
@@ -274,7 +274,7 @@ def create_compatible_bindings(redis_manager: 'RedisManager') -> Optional['Redis
     try:
         return RedisBackedBindingManager(redis_manager)
     except Exception as e:
-        logger = logging.getLogger("redis_backend.factory")
+        logger = get_logger("redis_backend.factory")
         logger.error(f"❌ Ошибка создания совместимого binding manager: {e}")
         return None
 
@@ -386,7 +386,7 @@ def get_redis_info() -> Dict[str, Any]:
     return {
         'version': __version__,
         'redis_available': REDIS_AVAILABLE,
-        'redis_client_version': getattr(redis, '__version__', 'unknown') if REDIS_AVAILABLE else None,
+        'redis_client_version': getattr(redis_async, '__version__', 'unknown') if REDIS_AVAILABLE else None,
         'features': [
             'Единый connection pool для всех операций',
             'Namespace изоляция для разных типов данных', 
@@ -497,7 +497,7 @@ __compatibility__ = {
 def _perform_startup_checks():
     """Выполнить проверки при импорте модуля"""
     
-    logger = logging.get_logger("redis_backend.startup")
+    logger = get_logger("redis_backend.startup")
     
     if REDIS_AVAILABLE:
         logger.debug("✅ Redis backend загружен успешно")

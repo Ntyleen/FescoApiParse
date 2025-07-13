@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 ConfigValue = Union[str, int, float, bool, None, Dict[str, Any], List[Any]]
 
 # Загружаем .env файл для секретов
-load_dotenv(dotenv_path='./deploy/.env/local.env')
+load_dotenv(dotenv_path='./deploy/.env/dev.env')
 
 
 class ConfigError(Exception):
@@ -359,7 +359,7 @@ class Config:
             config = cls._create_from_dict(merged_config)
 
             # Загрузка секретов из переменных окружения
-            config.auth_token = os.getenv("FESCO_TOKEN", "")
+            config.auth_token = os.getenv("FESCO_TOKEN", config.auth_token)
             if not config.auth_token:
                 raise ConfigError("❌ Не найден FESCO_TOKEN в переменных окружения")
             

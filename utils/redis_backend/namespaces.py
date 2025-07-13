@@ -1,9 +1,11 @@
 from utils.logging import get_logger
-from redis_manager import RedisManager, RedisConfig
+from redis_manager import RedisManager
 from abc import ABC
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
 import json
-
+from config.settings import RedisConfig
+if TYPE_CHECKING:
+    from .redis_manager import RedisManager
 
 class RedisNamespace(ABC):
     """
@@ -13,10 +15,10 @@ class RedisNamespace(ABC):
     но использует общий Redis connection pool.
     """
     
-    def __init__(self, manager: 'RedisManager', prefix: str, default_ttl: int):
+    def __init__(self, manager: 'RedisManager', prefix: str, config: RedisConfig):
         self.manager = manager
         self.prefix = prefix
-        self.default_ttl= RedisConfig.default_ttl * 3600
+        self.default_ttl= config.default_ttl * 3600
         self.logger = get_logger(f"redis.{prefix.rstrip(':')}")
     
     def _make_key(self, key: str) -> str:

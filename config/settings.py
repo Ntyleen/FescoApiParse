@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 ConfigValue = Union[str, int, float, bool, None, Dict[str, Any], List[Any]]
 
 # Загружаем .env файл для секретов
-load_dotenv(dotenv_path='E:/Repositories/FescoApiParse/deploy/.env/local.env')
+load_dotenv(dotenv_path='./deploy/.env/local.env')
 
 
 class ConfigError(Exception):
@@ -96,7 +96,7 @@ class FirebirdDatabaseConfig:
     
     # === НАСТРОЙКИ ОБРАБОТКИ ===
     excluded_status_ids: List[int] = field(default_factory=lambda: [8, 9, 24])  # закрыто, доставлено, отменено
-    target_line_ids: List[int] = field(default=[451])  # Если пусто - все линии
+    target_line_ids: List[int] = field(default_factory=lambda: [451])  # Если пусто - все линии
     batch_size: int = 100
     max_connections: int = 10
     
@@ -143,7 +143,7 @@ class CacheConfig:
     binding_prefix: str = "bindings_fesco:"
 
     def __post_init__(self):
-        if self.type not in ("file", "redis"):
+        if self.type not in ("file", "redis", "Redis"):
             raise ConfigError(f"Неподдерживаемый тип кэша: {self.type}")
         if self.ttl_hours <= 0:
             raise ConfigError("ttl_hours должен быть положительным")
@@ -310,7 +310,7 @@ class Config:
             environment = os.getenv("ENVIRONMENT", "local")
         
         # Путь к директории конфигурации
-        config_dir = Path("./FescoApiParse/deploy/config/")
+        config_dir = Path("./deploy/config/")
         
         # Базовые файлы конфигурации (в порядке приоритета)
         base_files = [
@@ -422,7 +422,7 @@ class Config:
         cache_config.redis = redis_config
 
         # БД конфигурации
-        database_dict = config_dict.get("database", {})
+        database_dict = config_dict.get("BrokerDatabase", {})
         database_config = FirebirdDatabaseConfig(**database_dict)
         
         # Остальные конфигурации

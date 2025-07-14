@@ -49,19 +49,19 @@ except ImportError as e:
 # ИМПОРТЫ КОМПОНЕНТОВ (с graceful degradation)
 # =============================================================================
 
-if REDIS_AVAILABLE:
+# if REDIS_AVAILABLE:
     # Импортируем основные компоненты только если Redis доступен
-    from redis_manager import RedisManager, RedisConfig
-    from namespaces import CacheNamespace, BindingNamespace
-    from adapters import RedisBackedCache, RedisBackedBindingManager
-else:
-    # Создаем заглушки для случая когда Redis недоступен
-    RedisManager = None
-    RedisConfig = None
-    CacheNamespace = None
-    BindingNamespace = None
-    RedisBackedCache = None
-    RedisBackedBindingManager = None
+    from .redis_manager import RedisManager, RedisConfig
+    from .namespaces import CacheNamespace, BindingNamespace
+    from .adapters import RedisBackedCache, RedisBackedBindingManager
+# else:
+#     # Создаем заглушки для случая когда Redis недоступен
+#     RedisManager = None
+#     RedisConfig = None
+#     CacheNamespace = None
+#     BindingNamespace = None
+#     RedisBackedCache = None
+#     RedisBackedBindingManager = None
 
 # =============================================================================
 # ПУБЛИЧНЫЙ API

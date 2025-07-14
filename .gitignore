@@ -31,3 +31,7 @@ deep_stack_trace_debug.py
 int_conversion_debug.py
 test_redis.py
 utils/redis_backend/fixed_redis_manager_complete.py
+diagnostic_tests.py
+real_redis_diagnosis.py
+.gitignore
+sdf.py

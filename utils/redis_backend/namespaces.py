@@ -1,5 +1,4 @@
 from utils.logging import get_logger
-from redis_manager import RedisManager
 from abc import ABC
 from typing import Dict, Any, Optional, List, TYPE_CHECKING
 import json

@@ -24,7 +24,6 @@ import re
 from models.container_event import TrackingResult
 from utils.logging import get_logger
 
-
 try:
     import firebird.driver as fdb  # pip install firebird-driver
     FIREBIRD_AVAILABLE = True
@@ -167,7 +166,7 @@ class EntityTableConfig:
     table_name: str = "ENTITY"  # Firebird обычно в верхнем регистре
     primary_key: str = "ID"
     container_column: str = "NAME"
-    status_column: str = "SP_ENTITY_STATUS"
+    status_column: str = "SP_ENTITY_STATUS_ID"
     line_column: str = "LEGAL_PERSON_LINE_ID"
     
     # Колонки дат
@@ -257,7 +256,7 @@ class EntityTableConfig:
             self.remaining_distance: EntityColumnMapping(
                 entity_column=self.remaining_distance,
                 fesco_field="remainingDistance",
-                operation_patterns=(),
+                operation_patterns=(" ",),
                 priority=10,
                 description="Слежение",
                 column_datatype="INTEGER"
@@ -362,9 +361,8 @@ class FirebirdConnectionManager:
             
             connection = fdb.connect(
                 database=self.config['database'],
-                dsn=dsn,
-                user=self.config['user'],
-                password=self.config['password'],
+                user='SYSDBA',
+                password='4fv50X%9r',
                 charset='UTF8'
             )
             

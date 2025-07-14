@@ -18,7 +18,7 @@ import asyncio
 import json
 from utils.logging import get_logger
 from typing import Dict, Any, Optional, List, Union
-from namespaces import RedisNamespace, BindingNamespace, CacheNamespace
+from .namespaces import RedisNamespace, BindingNamespace, CacheNamespace
 
 from contextlib import asynccontextmanager
 import redis

@@ -106,6 +106,7 @@ class EntityColumnMapping:
     priority: int = 0                   # Приоритет при совпадении нескольких паттернов
     description: str = ""               # Описание для документации
     column_datatype: str = "DATE"       # Тип данных колонки: "DATE", "TIMESTAMP", "INTEGER"
+    
 
     def __post_init__(self):
         if not self.operation_patterns:
@@ -937,22 +938,33 @@ class FirebirdEntityManager:
         
         # Находим подходящий маппинг
         operation = tracking_result.last_event.operation
-        date_mapping = self.operation_matcher.find_best_mapping(operation) # type: ignore
+        date_mapping = self.operation_matcher.find_best_mapping(operation)  # type: ignore
+
+        update_data: Dict[str, Any] = {}
         
         if not date_mapping:
             self.logger.debug(f"🤷 Не найден маппинг для операции: {operation}")
-            return False
         
         # Подготавливаем данные для обновления
-        update_data = self._prepare_update_data(tracking_result, date_mapping)
+        else:
+            update_data = self._prepare_update_data(tracking_result, date_mapping)
+
+        # Трансформируем оставшееся расстояние (TRACING_DAYS)
+        remaining_raw = getattr(tracking_result.last_event, "remainingDistance", None)
+        if remaining_raw is not None:
+            remaining_transformed = self.transformer.transform_value(remaining_raw, "INTEGER")
+            if remaining_transformed is not None:
+                update_data[self.entity_config.remaining_distance] = remaining_transformed
         
         if not update_data:
             self.logger.debug(f"📭 Нет данных для обновления ID {container_id}")
             return False
         
+        mapping_for_logging = date_mapping or self.entity_config.date_mappings.get(self.entity_config.remaining_distance)
+
         # Выполняем обновление
         def _update_sync():
-            return self._sync_update_entity_record(container_id, update_data, date_mapping)
+            return self._sync_update_entity_record(container_id, update_data, mapping_for_logging)
         
         try:
             async with self._get_thread_pool() as thread_pool:
@@ -960,7 +972,10 @@ class FirebirdEntityManager:
                 success = await loop.run_in_executor(thread_pool, _update_sync)
                 
                 if success:
-                    self.stats.record_update_success(date_mapping.entity_column, operation) # type: ignore
+                    if date_mapping and date_mapping.entity_column in update_data:
+                        self.stats.record_update_success(date_mapping.entity_column, operation)  # type: ignore
+                    if self.entity_config.remaining_distance in update_data:
+                        self.stats.record_update_success(self.entity_config.remaining_distance, operation)
                 else:
                     self.stats.record_update_failure()
                 
@@ -1016,6 +1031,7 @@ class FirebirdEntityManager:
                 # ИСПРАВЛЕНО: Правильная работа с транзакциями Firebird
                 # transaction = connection.trans()
                 # transaction.begin()
+                transaction = None
                 if hasattr(connection, "trans"):
                     transaction = connection.trans()
                     transaction.begin()
@@ -1034,7 +1050,7 @@ class FirebirdEntityManager:
                         values.append(value)
                     
                     # Добавляем CURRENT_TIMESTAMP для updated_at
-                    set_clauses.append("UPDATED_AT = CURRENT_TIMESTAMP")
+                    # set_clauses.append("UPDATED_AT = CURRENT_TIMESTAMP")
                     values.append(entity_id)  # ID для WHERE
                     
                     query = f"""

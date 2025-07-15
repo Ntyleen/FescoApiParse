@@ -127,7 +127,7 @@ class FescoTracker:
             
             stats = await engine.run_full_workflow(
                 batch_size=batch_size,
-                target_line_ids=set(get(self.config.processing, 'target_lines', [])) # type: ignore
+                target_line_ids=set(self.config.database.target_line_ids) # type: ignore
             )
             
             self._print_engine_stats(stats)

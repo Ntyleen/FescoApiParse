@@ -74,7 +74,7 @@ class ContainerTrackingEngine:
         self.logger.info("🎼 ContainerTrackingEngine инициализирован с Firebird интеграцией")
     
     async def run_full_workflow(
-        self, 
+        self,
         batch_size: int = 100,
         target_line_ids: Optional[Set[int]] = None
     ) -> EngineStats:
@@ -88,7 +88,9 @@ class ContainerTrackingEngine:
         Returns:
             Статистика выполнения
         """
-        
+        if target_line_ids is None:
+            target_line_ids = set(self.config.database.target_line_ids)
+
         self.logger.info("🚀 Запуск полного workflow трекинга")
         self.logger.info("="*60)
         

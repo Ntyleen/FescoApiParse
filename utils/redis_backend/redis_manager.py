@@ -77,13 +77,13 @@ class RedisManager:
     def get_cache_namespace(self) -> CacheNamespace:
         """Получить namespace для HTTP кэша"""
         if 'cache' not in self._namespaces:
-            self._namespaces['cache'] = CacheNamespace(self, self.config.cache_prefix)
+            self._namespaces['cache'] = CacheNamespace(self, self.config.cache_prefix, self.config,)
         return self._namespaces['cache']
     
     def get_binding_namespace(self) -> BindingNamespace:
         """Получить namespace для привязок контейнеров"""
         if 'binding' not in self._namespaces:
-            self._namespaces['binding'] = BindingNamespace(self, self.config.binding_prefix)
+            self._namespaces['binding'] = BindingNamespace(self, self.config.binding_prefix, self.config,)
         return self._namespaces['binding']
     
     async def get_stats(self) -> Dict[str, Any]:

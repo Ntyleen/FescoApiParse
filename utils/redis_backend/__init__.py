@@ -31,7 +31,7 @@ Redis Backend for FESCO Container Tracking
 
 from utils.logging import get_logger
 from typing import Optional, Dict, Any
-
+import redis
 # =============================================================================
 # ПРОВЕРКА ДОСТУПНОСТИ REDIS
 # =============================================================================
@@ -49,19 +49,19 @@ except ImportError as e:
 # ИМПОРТЫ КОМПОНЕНТОВ (с graceful degradation)
 # =============================================================================
 
-# if REDIS_AVAILABLE:
+if REDIS_AVAILABLE:
     # Импортируем основные компоненты только если Redis доступен
     from .redis_manager import RedisManager, RedisConfig
     from .namespaces import CacheNamespace, BindingNamespace
     from .adapters import RedisBackedCache, RedisBackedBindingManager
-# else:
-#     # Создаем заглушки для случая когда Redis недоступен
-#     RedisManager = None
-#     RedisConfig = None
-#     CacheNamespace = None
-#     BindingNamespace = None
-#     RedisBackedCache = None
-#     RedisBackedBindingManager = None
+else:
+    # Создаем заглушки для случая когда Redis недоступен
+    RedisManager = None
+    RedisConfig = None
+    CacheNamespace = None
+    BindingNamespace = None
+    RedisBackedCache = None
+    RedisBackedBindingManager = None
 
 # =============================================================================
 # ПУБЛИЧНЫЙ API
@@ -501,7 +501,7 @@ def _perform_startup_checks():
     
     if REDIS_AVAILABLE:
         logger.debug("✅ Redis backend загружен успешно")
-        logger.debug(f"📦 Redis client версия: {getattr(redis, '__version__', 'unknown')}")
+        logger.debug(f"📦 Redis client версия: {getattr(redis_async, '__version__', 'unknown')}")
     else:
         logger.info("⚠️ Redis недоступен - некоторые функции отключены")
         logger.info(f"💡 Для полной функциональности установите: pip install redis[hiredis]")

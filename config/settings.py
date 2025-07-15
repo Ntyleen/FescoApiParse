@@ -96,7 +96,7 @@ class FirebirdDatabaseConfig:
     
     # === НАСТРОЙКИ ОБРАБОТКИ ===
     excluded_status_ids: List[int] = field(default_factory=lambda: [8, 9, 24])  # закрыто, доставлено, отменено
-    target_line_ids: List[int] = field(default_factory=lambda: [451])  # Если пусто - все линии
+    target_line_ids: List[int] = field(default_factory=lambda: [451, 751])  # Если пусто - все линии
     batch_size: int = 100
     max_connections: int = 10
     
@@ -105,6 +105,16 @@ class FirebirdDatabaseConfig:
     
     def __post_init__(self):
         self.port = int(self.port)  # Приводим порт к int
+
+        # Приведение target_line_ids к List[int]
+        if isinstance(self.target_line_ids, list):
+            self.target_line_ids = [int(x) for x in self.target_line_ids]
+        elif self.target_line_ids is None:
+            self.target_line_ids = []
+        else:
+            # Одинарное значение (int/str и др.)
+            self.target_line_ids = [int(self.target_line_ids)]
+
         """Валидация Firebird конфигурации"""
         if not self.host:
             raise ConfigError("Firebird host не может быть пустым")

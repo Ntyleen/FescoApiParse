@@ -87,9 +87,9 @@ class EntityStatusID(IntEnum):
     def get_excluded_statuses(cls) -> Set[int]:
         """Статусы, которые исключаем из обработки"""
         return {
-            cls.TRANSPORTATION_CLOSED,  # 8 - "09. Перевозка закрыта"
-            cls.DELIVERED,              # 9 - "08. Доставлен" 
-            cls.CANCELLED               # 24 - "99. Отмена"
+            int(cls.TRANSPORTATION_CLOSED),  # 8 - "09. Перевозка закрыта"
+            int(cls.DELIVERED),              # 9 - "08. Доставлен" 
+           int(cls.CANCELLED)               # 24 - "99. Отмена"
         }
 
 
@@ -189,6 +189,8 @@ class EntityTableConfig:
             self.date_mappings = self._create_default_mappings()
         self._validate_config()
 
+        self.excluded_status_ids = {int(v) for v in self.excluded_status_ids}
+
     def _validate_config(self):
         """Валидация конфигурации"""
         if not self.table_name or not self.table_name.strip():
@@ -275,8 +277,8 @@ class ContainerInfo:
     status_name: str = ""
     line_id: Optional[int] = None
     priority: int = 0
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    # created_at: Optional[str] = None
+    # updated_at: Optional[str] = None
     
     # Текущие значения дат (для отслеживания изменений)
     current_dates: Dict[str, Optional[str]] = field(default_factory=dict)
@@ -831,8 +833,8 @@ class FirebirdEntityManager:
             self.entity_config.date_in,
             self.entity_config.date_railway_loading,
             self.entity_config.date_railway_delivery,
-            "CREATED_AT",
-            "UPDATED_AT"
+            # "CREATED_AT",
+            # "UPDATED_AT"
         ]
         
         query = f"""
@@ -847,13 +849,13 @@ class FirebirdEntityManager:
         if self.entity_config.excluded_status_ids:
             status_placeholders = ','.join(['?'] * len(self.entity_config.excluded_status_ids))
             query += f" AND {self.entity_config.status_column} NOT IN ({status_placeholders})"
-            params.extend(list(self.entity_config.excluded_status_ids))
+            params.extend([int(s) for s in self.entity_config.excluded_status_ids])
         
         # Фильтр по линиям
         if target_line_ids:
             line_placeholders = ','.join(['?'] * len(target_line_ids))
             query += f" AND {self.entity_config.line_column} IN ({line_placeholders})"
-            params.extend(list(target_line_ids))
+            params.extend(list((target_line_ids)))
         
         # Фильтр по приоритету
         if min_priority > 0:
@@ -874,8 +876,8 @@ class FirebirdEntityManager:
             status_id=row[2],
             status_name=self._get_status_name(row[2]),
             line_id=row[3],  # LEGAL_PERSON_LINE_ID
-            created_at=str(row[9]) if row[9] else None,  # CREATED_AT
-            updated_at=str(row[10]) if row[10] else None,  # UPDATED_AT
+            # created_at=str(row[9]) if row[9] else None,  # CREATED_AT
+            # updated_at=str(row[10]) if row[10] else None,  # UPDATED_AT
             current_dates={
                 self.entity_config.date_eta: str(row[4]) if row[4] else None,
                 self.entity_config.date_etd: str(row[5]) if row[5] else None,

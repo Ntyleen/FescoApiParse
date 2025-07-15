@@ -65,7 +65,7 @@ class CacheNamespace(RedisNamespace):
             json_data = json.dumps(data, ensure_ascii=False)
             await client.setex(full_key, ttl, json_data)
             
-            self.logger.debug(f"Cache SET: {key} (TTL: {ttl}s)")
+            self.logger.debug(f"Cache SET: {full_key} (TTL: {ttl}s)")
             return True
             
         except Exception as e:

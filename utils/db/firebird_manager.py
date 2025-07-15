@@ -1014,9 +1014,14 @@ class FirebirdEntityManager:
         try:
             with self.connection_manager.get_connection() as connection:
                 # ИСПРАВЛЕНО: Правильная работа с транзакциями Firebird
-                transaction = connection.trans()
-                transaction.begin()
-                
+                # transaction = connection.trans()
+                # transaction.begin()
+                if hasattr(connection, "trans"):
+                    transaction = connection.trans()
+                    transaction.begin()
+                else:
+                    connection.begin()
+
                 try:
                     cursor = connection.cursor()
                     
@@ -1055,7 +1060,10 @@ class FirebirdEntityManager:
                         exists = cursor.fetchone()[0] > 0
                         rows_affected = 1 if exists else 0
                     
-                    transaction.commit()
+                    if transaction:
+                        transaction.commit()
+                    else:
+                        connection.commit()
                     
                     # Обновляем метрики производительности
                     operation_time = (datetime.now() - start_time).total_seconds() * 1000
@@ -1069,7 +1077,10 @@ class FirebirdEntityManager:
                         return False
                         
                 except Exception as e:
-                    transaction.rollback()
+                    if transaction:
+                        transaction.rollback()
+                    else:
+                        connection.rollback()
                     raise e
         except Exception as e:
             self.logger.error(f"❌ Ошибка обновления ID {entity_id}: {e}")

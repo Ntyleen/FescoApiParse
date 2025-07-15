@@ -152,8 +152,8 @@ __all__ = [
     'RedisConfig', 
     'CacheNamespace',
     'BindingNamespace',
-    'RedisBackedCache',
-    'RedisBackedBindingManager',
+#    'RedisBackedCache',
+#    'RedisBackedBindingManager',
     'create_redis_manager',
     'REDIS_AVAILABLE'
 ]

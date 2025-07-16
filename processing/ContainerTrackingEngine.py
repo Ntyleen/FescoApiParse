@@ -351,12 +351,34 @@ class ContainerTrackingEngine:
         written_count = 0
         for container_info, tracking_result in container_results:
             try:
+                mapping = self.firebird_manager.operation_matcher.find_best_mapping(
+                    tracking_result.last_event.operation    # type: ignore
+                ) if tracking_result.last_event else None
+
+                if (
+                    mapping
+                    and mapping.entity_column
+                    == self.firebird_manager.entity_config.date_railway_loading
+                    and container_info.current_dates.get(mapping.entity_column)
+                ):
+                    self.logger.debug(
+                        f"⏭️ {container_info.container_number}: "
+                        f"{mapping.entity_column} уже заполнено"
+                    )
+                    continue
                 # КЛЮЧЕВОЕ: Используем container_info.id для обновления записи
                 success = await self.firebird_manager.update_container_from_tracking(
                     container_info.id,  # ID записи в entity таблице
                     tracking_result
                 )
                 
+                if success and mapping:
+                    container_info.current_dates[mapping.entity_column] = (
+                        tracking_result.last_event.date
+                        if tracking_result.last_event
+                        else container_info.current_dates.get(mapping.entity_column)
+                    )
+
                 if success:
                     written_count += 1
                     self.engine_stats.firebird_updates += 1

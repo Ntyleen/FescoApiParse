@@ -9,14 +9,16 @@ import yaml
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union, TypeVar, Generic
 from datetime import datetime
 import re
 
 from dotenv import load_dotenv
 
+ConfigValue = Union[str, int, float, bool, None, Dict[str, Any], List[Any]]
+
 # Загружаем .env файл для секретов
-load_dotenv(dotenv_path='E:/Repositories/FescoApiParse/deploy/.env/local.env')
+load_dotenv(dotenv_path='./deploy/.env/dev.env')
 
 
 class ConfigError(Exception):
@@ -46,15 +48,99 @@ class ApiConfig:
 
 @dataclass
 class RedisConfig:
-    """Конфигурация Redis"""
+    """Конфигурация Redis подключения"""
     url: str = "redis://localhost:6379"
-    prefix: str = "fesco_cache:"
+    max_connections: int = 20
     socket_timeout: int = 5
+    socket_connect_timeout: int = 5
     retry_on_timeout: bool = True
+    decode_responses: bool = True
+    
+    # Настройки для разных namespace'ов
+    default_ttl: int = 3600
+    cache_prefix: str = "fesco_cache:"
+    binding_prefix: str = "fesco_bindings:"
     
     def __post_init__(self):
         if not self.url.startswith(("redis://", "rediss://")):
             raise ConfigError(f"Неверный формат Redis URL: {self.url}")
+
+
+@dataclass
+class FirebirdDatabaseConfig:
+    """Конфигурация Firebird БД для работы с entity таблицей"""
+    
+    # === ПОДКЛЮЧЕНИЕ К FIREBIRD ===
+    host: str = "localhost"
+    port: int = 3050  # Стандартный порт Firebird
+    user: str = "SYSDBA"  # Стандартный пользователь
+    password: str = ""
+    database: str = ""  # Путь к .fdb файлу
+    dsn: Optional[str] = None  # Альтернативный способ подключения
+    charset: str = "UTF8"
+    
+    # === НАСТРОЙКИ ENTITY ТАБЛИЦЫ ===
+    table_name: str = "ENTITY"
+    primary_key: str = "ID"
+    container_column: str = "NAME"
+    status_column: str = "SP_ENTITY_STATUS"
+    line_column: str = "LEGAL_PERSON_LINE_ID"
+    
+    # === КОЛОНКИ ДАТ ===
+    date_eta: str = "DATE_ETA"
+    date_etd: str = "DATE_ETD"
+    date_in: str = "DATE_IN"
+    date_railway_loading: str = "DATE_RAILWAY_LOADING"
+    date_railway_delivery: str = "DATE_RAILWAY_DELIVERY"
+    remaining_distance: str = "TRACING_DAYS"
+    
+    # === НАСТРОЙКИ ОБРАБОТКИ ===
+    excluded_status_ids: List[int] = field(default_factory=lambda: [8, 9, 24])  # закрыто, доставлено, отменено
+    target_line_ids: List[int] = field(default_factory=lambda: [451, 751])  # Если пусто - все линии
+    batch_size: int = 100
+    max_connections: int = 10
+    
+    # === КАСТОМНЫЕ МАППИНГИ ===
+    custom_date_mappings: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    
+    def __post_init__(self):
+        self.port = int(self.port)  # Приводим порт к int
+
+        # Приведение target_line_ids к List[int]
+        if isinstance(self.target_line_ids, list):
+            self.target_line_ids = [int(x) for x in self.target_line_ids]
+        elif self.target_line_ids is None:
+            self.target_line_ids = []
+        else:
+            # Одинарное значение (int/str и др.)
+            self.target_line_ids = [int(self.target_line_ids)]
+
+        """Валидация Firebird конфигурации"""
+        if not self.host:
+            raise ConfigError("Firebird host не может быть пустым")
+        if not self.user:
+            raise ConfigError("Firebird user не может быть пустым")
+        if not self.database:
+            raise ConfigError("Firebird database path не может быть пустым")
+        if self.port <= 0 or self.port > 65535:
+            raise ConfigError("Firebird port должен быть от 1 до 65535")
+    
+    def to_firebird_config(self) -> Dict[str, Any]:
+        """Преобразовать в формат для FirebirdConnectionManager"""
+        config = {
+            'host': self.host,
+            'port': self.port,
+            'user': self.user,
+            'password': self.password,
+            'database': self.database,
+            'charset': self.charset
+        }
+        
+        if self.dsn:
+            config['dsn'] = self.dsn
+            
+        return config
+    
 
 
 @dataclass
@@ -64,9 +150,11 @@ class CacheConfig:
     ttl_hours: float = 1.0
     dir: str = "./FescoApiParse/cache/"
     redis: RedisConfig = field(default_factory=RedisConfig)
-    
+    cache_prefix: str = "cache_fesco:"
+    binding_prefix: str = "bindings_fesco:"
+
     def __post_init__(self):
-        if self.type not in ("file", "redis"):
+        if self.type not in ("file", "redis", "Redis"):
             raise ConfigError(f"Неподдерживаемый тип кэша: {self.type}")
         if self.ttl_hours <= 0:
             raise ConfigError("ttl_hours должен быть положительным")
@@ -134,6 +222,65 @@ class ProcessingConfig:
             raise ConfigError("pause_between_batches не может быть отрицательным")
 
 
+class EnvironmentSubstitutor:
+    """
+    Отдельный класс для подстановки переменных окружения.
+    """
+    
+    def __init__(self):
+        # Компилируем regex один раз для производительности
+        self._env_pattern = re.compile(r'\$\{([^}]+)\}')
+    
+    def _replace_env_variables(self, text: str) -> str:
+        """Заменяет переменные окружения в строке"""
+        def replace_var(match):
+            var_name = match.group(1)
+            env_value = os.getenv(var_name)
+            if env_value is None:
+                logging.warning(f"⚠️ Переменная окружения {var_name} не найдена")
+                return match.group(0)  # Возвращаем исходное значение
+            return env_value
+        
+        return self._env_pattern.sub(replace_var, text)
+    
+    def substitute_in_value(self, value: ConfigValue) -> ConfigValue:
+        """
+        Подстановка переменных в произвольном значении конфигурации
+        
+        Сохраняет структуру и типы данных
+        """
+        if isinstance(value, str):
+            return self._replace_env_variables(value)
+        elif isinstance(value, dict):
+            return self.substitute_in_dict(value)
+        elif isinstance(value, list):
+            return self.substitute_in_list(value)
+        else:
+            # Примитивные типы (int, bool, None) возвращаем как есть
+            return value
+    
+    def substitute_in_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Подстановка переменных в словаре
+        
+        Четкий контракт: Dict -> Dict
+        """
+        return {
+            key: self.substitute_in_value(value) 
+            for key, value in data.items()
+        }
+    
+    def substitute_in_list(self, data: List[Any]) -> List[Any]:
+        """
+        Подстановка переменных в списке
+        
+        Четкий контракт: List -> List
+        """
+        return [
+            self.substitute_in_value(item) 
+            for item in data
+        ]
+
 @dataclass
 class Config:
     """
@@ -146,6 +293,8 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
+    database: FirebirdDatabaseConfig = field(default_factory=FirebirdDatabaseConfig)
+
     
     # Секреты из переменных окружения
     auth_token: str = ""
@@ -172,13 +321,13 @@ class Config:
             environment = os.getenv("ENVIRONMENT", "local")
         
         # Путь к директории конфигурации
-        config_dir = Path("./FescoApiParse/deploy/config/")
+        config_dir = Path("./deploy/config/")
         
         # Базовые файлы конфигурации (в порядке приоритета)
         base_files = [
             config_dir / "app_global.yaml",
             config_dir / f"{environment}.yaml",
-            config_dir / "local.yaml"  # Локальные переопределения
+        #    config_dir / "local.yaml"  # Локальные переопределения
         ]
         
         # Добавляем пользовательские файлы
@@ -218,81 +367,25 @@ class Config:
         # Создание объекта конфигурации
         try:
             config = cls._create_from_dict(merged_config)
-            print(f"{config.auth_token}")
+
             # Загрузка секретов из переменных окружения
-            config.auth_token = os.getenv("FESCO_TOKEN", "")
+            config.auth_token = os.getenv("FESCO_TOKEN", config.auth_token)
             if not config.auth_token:
                 raise ConfigError("❌ Не найден FESCO_TOKEN в переменных окружения")
             
             # Применение дополнительных переопределений из .env
-           # config._apply_env_overrides()
+            config.database.password = os.getenv("DB_PASSWORD", config.database.password)
+            config.database.user = os.getenv("DB_USER", config.database.user)
+            config.database.port = int(os.getenv('DB_PORT', config.database.port))
             
             logging.info(f"✅ Конфигурация загружена для окружения: {environment}")
             logging.info(f"✅ Токен загружен: {config.auth_token[:10]}...")
+            logging.info(f"✅ БД источник: {config.database.host}/{config.database.database}")
             
             return config
             
         except Exception as e:
             raise ConfigError(f"Ошибка создания конфигурации: {e}")
-    
-    # @classmethod
-    # def from_env(cls) -> 'Config':
-        # """
-        # Обратная совместимость: загрузка только из переменных окружения
-        # 
-        # @deprecated: Используйте load_config() для загрузки из YAML
-        # """
-        # logging.warning("⚠️ Config.from_env() устарел, используйте load_config()")
-        # 
-      #  Создаем базовую конфигурацию
-        # config = cls()
-        # 
-      #  Загружаем токен
-        # config.auth_token = os.getenv("FESCO_TOKEN", "")
-        # if not config.auth_token:
-            # raise ConfigError("❌ Не найден FESCO_TOKEN в переменных окружения")
-        # 
-       # Применяем переопределения из переменных окружения
-        # config._apply_env_overrides()
-        # 
-        # logging.info(f"✅ Конфигурация загружена из переменных окружения")
-        # return config
-    # 
-    # def _apply_env_overrides(self) -> None:
-        # """Применение переопределений из переменных окружения"""
-        # 
-       # API переопределения
-        # if timeout := os.getenv("FESCO_TIMEOUT_SECONDS"):
-            # self.api.timeout_seconds = int(timeout)
-        # 
-        # if parallel := os.getenv("FESCO_MAX_PARALLEL"):
-            # self.api.max_parallel = int(parallel)
-        # 
-        # if base_url := os.getenv("FESCO_BASE_URL"):
-            # self.api.base_url = base_url
-        # 
-        # if token_type := os.getenv("FESCO_TOKEN_TYPE"):
-            # self.api.token_type = token_type
-        # 
-       # Cache переопределения
-        # if cache_type := os.getenv("FESCO_CACHE_TYPE"):
-            # self.cache.type = cache_type
-        # 
-        # if cache_ttl := os.getenv("FESCO_CACHE_TTL_HOURS"):
-            # self.cache.ttl_hours = float(cache_ttl)
-        # 
-        # if cache_dir := os.getenv("FESCO_CACHE_DIR"):
-            # self.cache.dir = cache_dir
-        # 
-        # if redis_url := os.getenv("REDIS_URL"):
-            # self.cache.redis.url = redis_url
-        # 
-      #  Logging переопределения
-        # if log_level := os.getenv("FESCO_LOG_LEVEL"):
-            # self.logging.level = log_level
-        # 
-        # if log_file := os.getenv("FESCO_LOG_FILE"):
-            # self.logging.file = log_file
     
     @staticmethod
     def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -311,33 +404,18 @@ class Config:
     
     @staticmethod
     def _substitute_env_vars(config: Dict[str, Any]) -> Dict[str, Any]:
-        """Рекурсивная подстановка переменных окружения в формате ${VAR_NAME}"""
+        """
+        Подстановка переменных окружения в конфигурации
         
-        def substitute_value(value):
-            if isinstance(value, str):
-                # Поиск и замена переменных окружения
-                pattern = re.compile(r'\$\{([^}]+)\}')
-                
-                def replace_var(match):
-                    var_name = match.group(1)
-                    env_value = os.getenv(var_name)
-                    if env_value is None:
-                        logging.warning(f"⚠️ Переменная окружения {var_name} не найдена")
-                        return match.group(0)  # Возвращаем исходное значение
-                    return env_value
-                
-                return pattern.sub(replace_var, value)
-            
-            elif isinstance(value, dict):
-                return {k: substitute_value(v) for k, v in value.items()}
-            
-            elif isinstance(value, list):
-                return [substitute_value(item) for item in value]
-            
-            else:
-                return value
+        Теперь это простая функция-оркестратор с понятной логикой:
+        1. Создаем специализированный инструмент
+        2. Используем его метод с четким контрактом Dict -> Dict
+        3. Возвращаем результат
         
-        return substitute_value(config)
+        Никаких неожиданностей, никаких нарушений контракта!
+        """
+        substitutor = EnvironmentSubstitutor()
+        return substitutor.substitute_in_dict(config)
     
     @classmethod
     def _create_from_dict(cls, config_dict: Dict[str, Any]) -> 'Config':
@@ -353,6 +431,10 @@ class Config:
         redis_config = RedisConfig(**redis_dict)
         cache_config = CacheConfig(**cache_dict)
         cache_config.redis = redis_config
+
+        # БД конфигурации
+        database_dict = config_dict.get("BrokerDatabase", {})
+        database_config = FirebirdDatabaseConfig(**database_dict)
         
         # Остальные конфигурации
         logging_config = LoggingConfig(**config_dict.get("logging", {}))
@@ -364,25 +446,47 @@ class Config:
             cache=cache_config,
             logging=logging_config,
             output=output_config,
-            processing=processing_config
+            processing=processing_config,
+            database=database_config,
         )
     
     def to_dict(self) -> Dict[str, Any]:
         """Преобразование конфигурации в словарь (для отладки)"""
         import dataclasses
+        from typing import Any, Dict, Union
         
-        def convert_dataclass(obj):
+        def convert_dataclass(obj: Any) -> Any:
+            """Рекурсивное преобразование dataclass в словарь"""
             if dataclasses.is_dataclass(obj):
                 result = {}
                 for field in dataclasses.fields(obj):
                     value = getattr(obj, field.name)
                     result[field.name] = convert_dataclass(value)
                 return result
-            return obj
+            elif isinstance(obj, (list, tuple)):
+                # Обрабатываем списки и кортежи
+                return [convert_dataclass(item) for item in obj]
+            elif isinstance(obj, dict):
+                # Обрабатываем обычные словари
+                return {k: convert_dataclass(v) for k, v in obj.items()}
+            else:
+                # Для простых типов (str, int, bool, None) возвращаем как есть
+                return obj
         
-        result = convert_dataclass(self)
+        # Гарантированно получаем словарь, так как self - это dataclass
+        result: Dict[str, Any] = convert_dataclass(self)
+        
+        # Теперь безопасно работаем со словарем
         # Скрываем секретные данные
-        result["auth_token"] = "***"
+        if "auth_token" in result:
+            result["auth_token"] = "***"
+        
+        if "database" in result and isinstance(result["database"], dict):
+            result["database"]["password"] = "***"
+        
+        if "external_database" in result and isinstance(result["external_database"], dict):
+            result["external_database"]["password"] = "***"
+            
         return result
 
 

@@ -1,233 +1,259 @@
 # __init__.py
 """
 FESCO Container Tracking System
+===============================
 
-Система трекинга контейнеров FESCO с поддержкой:
-- YAML конфигурации  
-- Централизованного логирования
+Система трекинга контейнеров с поддержкой:
+- Множественных источников данных (Firebird, файлы)
 - Кэширования (File/Redis)
 - Параллельной обработки
-- Дедупликации событий
+- YAML конфигурации
 
-Quick Start:
+Быстрый старт:
+    >>> import asyncio
     >>> from fesco_tracker import quick_track_containers
     >>> 
-    >>> containers = ["TDSU6005411", "FESU5384983"] 
-    >>> results = await quick_track_containers(containers)
+    >>> containers = ["TDSU6005411", "FESU5384983"]
+    >>> results = asyncio.run(quick_track_containers(containers))
     >>> 
     >>> for result in results:
-    ...     print(f"{result.container_number}: {result.success}")
+    ...     print(f"{result.container_number}: {'✅' if result.success else '❌'}")
 """
 
-# Основные компоненты системы
-from config import load_config, Config
-from models import ContainerEvent, TrackingResult, ProcessingStats
-from cache import create_cache
-from processing import create_tracker
-from utils import setup_logging_from_config, get_logger
-
-# Публичный API всей системы
-__all__ = [
-    # Основная функция
-    'quick_track_containers',
-    'track_containers_advanced',
-    
-    # Конфигурация
-    'load_config',
-    'Config',
-    
-    # Модели данных
-    'ContainerEvent',
-    'TrackingResult', 
-    'ProcessingStats',
-    
-    # Компоненты
-    'create_cache',
-    'create_tracker',
-    
-    # Логирование
-    'setup_logging_from_config',
-    'get_logger',
-]
-
-# Метаданные проекта
-__version__ = "0.0.1"
+__version__ = "0.1.0"
 __author__ = "FESCO Container Tracking Team"
-__description__ = "Advanced container tracking system with YAML configuration"
-__url__ = "https://github.com/your-repo/fesco-tracker"
+__description__ = "Container tracking system with YAML configuration"
 
+# =============================================================================
+# ПРОСТЫЕ ФУНКЦИИ ДЛЯ БЫСТРОГО СТАРТА
+# =============================================================================
 
 async def quick_track_containers(
     container_numbers: list,
     environment: str = "development",
-    log_level: str = "INFO"
+    output_file: str = None # type: ignore
 ) -> list:
     """
-    Быстрый трекинг контейнеров с минимальной настройкой
+    Быстрый трекинг контейнеров без настройки
     
     Args:
         container_numbers: Список номеров контейнеров
         environment: Окружение (development/production)
-        log_level: Уровень логирования
+        output_file: Файл для сохранения результатов (опционально)
         
     Returns:
-        Список TrackingResult
+        Список результатов трекинга
         
     Example:
-        >>> import asyncio
-        >>> from fesco_tracker import quick_track_containers
-        >>> 
-        >>> async def main():
-        ...     containers = ["TDSU6005411", "FESU5384983"]
-        ...     results = await quick_track_containers(containers)
-        ...     
-        ...     for result in results:
-        ...         if result.success:
-        ...             print(f"✅ {result.container_number}: {result.last_event.operation}")
-        ...         else:
-        ...             print(f"❌ {result.container_number}: {result.error_message}")
-        >>> 
-        >>> asyncio.run(main())
+        >>> results = await quick_track_containers(["TDSU6005411"])
+        >>> print(results[0].success)
     """
-    # Загрузка конфигурации
+    from config import load_config
+    from cache import create_cache
+    from processing import ContainerTracker
+    
+    # Загружаем конфигурацию
     config = load_config(environment=environment)
     
-    # Настройка логирования
-    if log_level != config.logging.level:
-        config.logging.level = log_level
-    setup_logging_from_config(config.logging)
+    # Создаем кэш
+    cache = create_cache(
+        cache_type="file",  # Для простоты используем файловый кэш
+        cache_dir=config.cache.dir
+    )
     
-    logger = get_logger("fesco_tracker.quick")
-    logger.info(f"🚀 Быстрый трекинг {len(container_numbers)} контейнеров")
+    # Создаем трекер
+    tracker = ContainerTracker(config, cache)
     
-    try:
-        # Создание компонентов
-        cache = create_cache(
-            cache_type=config.cache.type,
-            cache_dir=config.cache.dir,
-            redis_url=config.cache.redis.url,
-            prefix=config.cache.redis.prefix,
-            ttl_hours=config.cache.ttl_hours
-        )
+    # Собираем результаты
+    results = []
+    async for result in tracker.track_containers(container_numbers):
+        results.append(result)
+    
+    # Сохраняем если нужно
+    if output_file:
+        import json
+        from pathlib import Path
+        from dataclasses import asdict
         
-        tracker = create_tracker(config, cache)
+        Path(output_file).parent.mkdir(parents=True, exist_ok=True)
         
-        # Трекинг
-        results = []
-        async for result in tracker.track_containers(container_numbers):
-            results.append(result)
-        
-        # Статистика
-        successful = sum(1 for r in results if r.success)
-        logger.info(f"✅ Завершено: {successful}/{len(results)} успешных")
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка быстрого трекинга: {e}")
-        raise
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(
+                [asdict(r) for r in results],
+                f,
+                ensure_ascii=False,
+                indent=2
+            )
+    
+    return results
 
 
-async def track_containers_advanced(
-    container_numbers: list,
-    config_files: list = None,
-    environment: str = None,
-    cache_type: str = None,
-    batch_size: int = None
-) -> list:
+def check_system_status() -> dict:
     """
-    Продвинутый трекинг контейнеров с полной настройкой
+    Проверить статус всех компонентов системы
     
-    Args:
-        container_numbers: Список номеров контейнеров
-        config_files: Дополнительные файлы конфигурации
-        environment: Окружение
-        cache_type: Тип кэша ("file" или "redis")
-        batch_size: Размер батча для больших списков
-        
     Returns:
-        Список TrackingResult
+        Словарь со статусом компонентов
         
     Example:
-        >>> results = await track_containers_advanced(
-        ...     containers=["TDSU6005411", "FESU5384983"],
-        ...     environment="production",
-        ...     cache_type="redis",
-        ...     batch_size=100
-        ... )
+        >>> status = check_system_status()
+        >>> print(f"Firebird: {status['firebird']['available']}")
+        >>> print(f"Redis: {status['redis']['available']}")
     """
-    # Загрузка конфигурации
-    config = load_config(environment=environment, config_files=config_files)
-    
-    # Переопределение настроек
-    if cache_type:
-        config.cache.type = cache_type
-    if batch_size:
-        config.processing.batch_size = batch_size
-    
-    # Настройка логирования
-    setup_logging_from_config(config.logging)
-    
-    logger = get_logger("fesco_tracker.advanced")
-    logger.info(f"🎯 Продвинутый трекинг {len(container_numbers)} контейнеров")
-    logger.info(f"🔧 Окружение: {environment or 'auto'}")
-    logger.info(f"💾 Кэш: {config.cache.type}")
-    
-    try:
-        # Создание компонентов
-        cache = create_cache(
-            cache_type=config.cache.type,
-            cache_dir=config.cache.dir,
-            redis_url=config.cache.redis.url,
-            prefix=config.cache.redis.prefix,
-            ttl_hours=config.cache.ttl_hours
-        )
-        
-        tracker = create_tracker(config, cache)
-        
-        # Выбор режима обработки
-        if len(container_numbers) > config.processing.batch_size:
-            logger.info(f"📦 Батчевая обработка: размер батча {config.processing.batch_size}")
-            
-            all_results = []
-            async for batch_results in tracker.track_containers_batch(
-                container_numbers, 
-                config.processing.batch_size
-            ):
-                all_results.extend(batch_results)
-            
-            return all_results
-        
-        else:
-            logger.info("🎯 Обычная обработка")
-            
-            results = []
-            async for result in tracker.track_containers(container_numbers):
-                results.append(result)
-            
-            return results
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка продвинутого трекинга: {e}")
-        raise
-
-
-def get_version() -> str:
-    """Получить версию пакета"""
-    return __version__
-
-
-def get_info() -> dict:
-    """
-    Получить информацию о пакете
-    
-    Returns:
-        Словарь с метаданными пакета
-    """
-    return {
-        "name": "fesco-tracker",
-        "version": __version__,
-        "description": __description__,
-        "author": __author__,
-        "url": __url__
+    status = {
+        'version': __version__,
+        'components': {}
     }
+    
+    # Проверка Firebird
+    try:
+        from utils.db.firebird_manager import FIREBIRD_AVAILABLE
+        status['components']['firebird'] = {
+            'available': FIREBIRD_AVAILABLE,
+            'message': 'Firebird драйвер доступен' if FIREBIRD_AVAILABLE else 'Установите firebird-driver'
+        }
+    except ImportError:
+        status['components']['firebird'] = {
+            'available': False,
+            'message': 'Модуль firebird_manager не найден'
+        }
+    
+    # Проверка Redis
+    try:
+        from utils.redis_backend import REDIS_AVAILABLE
+        status['components']['redis'] = {
+            'available': REDIS_AVAILABLE,
+            'message': 'Redis клиент доступен' if REDIS_AVAILABLE else 'Установите redis[hiredis]'
+        }
+    except ImportError:
+        status['components']['redis'] = {
+            'available': False,
+            'message': 'Модуль redis_backend не найден'
+        }
+    
+    # Общий статус
+    all_available = all(
+        comp.get('available', False) 
+        for comp in status['components'].values()
+    )
+    
+    status['ready'] = all_available
+    status['message'] = 'Все компоненты доступны' if all_available else 'Некоторые компоненты недоступны'
+    
+    return status
+
+
+def create_test_config(
+    containers: list = None, # type: ignore
+    use_redis: bool = False,
+    batch_size: int = 10
+) -> dict:
+    """
+    Создать тестовую конфигурацию для экспериментов
+    
+    Args:
+        containers: Список тестовых контейнеров
+        use_redis: Использовать Redis вместо файлового кэша
+        batch_size: Размер батча для обработки
+        
+    Returns:
+        Словарь с тестовой конфигурацией
+    """
+    if containers is None:
+        containers = [
+            "TDSU6005411",
+            "FESU5384983",
+            "TEMU1234567"
+        ]
+    
+    return {
+        'environment': 'test',
+        'containers': containers,
+        'cache': {
+            'type': 'redis' if use_redis else 'file',
+            'ttl_hours': 0.5  # 30 минут для тестов
+        },
+        'processing': {
+            'batch_size': batch_size,
+            'enable_retries': False  # Отключаем для тестов
+        },
+        'logging': {
+            'level': 'DEBUG'
+        }
+    }
+
+
+# =============================================================================
+# ЭКСПОРТ ОСНОВНЫХ КОМПОНЕНТОВ
+# =============================================================================
+
+# Для обратной совместимости экспортируем основные классы
+try:
+    from config import Config, load_config
+    from models import ContainerEvent, TrackingResult, ProcessingStats
+    from cache import create_cache
+    from processing import ContainerTracker
+    
+    __all__ = [
+        # Быстрые функции
+        'quick_track_containers',
+        'check_system_status',
+        'create_test_config',
+        
+        # Конфигурация
+        'Config',
+        'load_config',
+        
+        # Модели
+        'ContainerEvent',
+        'TrackingResult',
+        'ProcessingStats',
+        
+        # Компоненты
+        'create_cache',
+        'ContainerTracker',
+        
+        # Метаданные
+        '__version__',
+    ]
+    
+except ImportError as e:
+    # Если какие-то модули не импортируются, система все равно работает
+    import warnings
+    warnings.warn(f"Некоторые компоненты недоступны: {e}")
+    
+    __all__ = [
+        'quick_track_containers',
+        'check_system_status', 
+        'create_test_config',
+        '__version__',
+    ]
+
+
+# =============================================================================
+# ПОЛЕЗНЫЕ УТИЛИТЫ ДЛЯ РАЗРАБОТКИ
+# =============================================================================
+
+def print_banner():
+    """Вывести красивый баннер"""
+    banner = """
+    ╔═══════════════════════════════════════╗
+    ║   FESCO Container Tracking System     ║
+    ║         Version {}              ║
+    ╚═══════════════════════════════════════╝
+    """.format(__version__.center(10))
+    print(banner)
+
+
+if __name__ == "__main__":
+    # При запуске модуля показываем информацию
+    print_banner()
+    
+    status = check_system_status()
+    print("\n📊 Статус компонентов:")
+    for name, info in status['components'].items():
+        emoji = "✅" if info['available'] else "❌"
+        print(f"  {emoji} {name}: {info['message']}")
+    
+    print(f"\n🎯 Система {'готова к работе' if status['ready'] else 'требует настройки'}")
+    print("\n💡 Для запуска используйте: python main.py --help")

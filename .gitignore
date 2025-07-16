@@ -4,6 +4,7 @@ output/
 ignore/
 logs/
 bckp/
+
 __pycache__*
 #### .env, configs
 *.env
@@ -13,3 +14,26 @@ __pycache__*
 
 ### deploy
 !deploy/config/app_global.yaml
+config/sosal.py
+tests/conftest.py
+tests/testing_setup_guide.txt
+tests/db/firebird_tests.py
+utils/db/database_init
+
+### Virtual environment\
+.venv/
+.pytest_cache/
+
+### IDE and editor files
+.vscode/
+.idea/
+deep_stack_trace_debug.py
+int_conversion_debug.py
+test_redis.py
+utils/redis_backend/fixed_redis_manager_complete.py
+diagnostic_tests.py
+real_redis_diagnosis.py
+.gitignore
+sdf.py
+utils/db/bckp.py
+processing/bkcp.py

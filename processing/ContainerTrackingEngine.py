@@ -4,6 +4,7 @@
 """
 
 import asyncio
+from datetime import datetime
 from typing import List, Dict, Set, AsyncGenerator, Optional, Union, Tuple
 import aiohttp
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from utils.db.firebird_manager import (
     create_firebird_entity_manager
 )
 
-from models.container_event import TrackingResult
+from models.container_event import TrackingResult, ContainerEvent
 from models.processing_stats import ProcessingStats
 from utils.logging import get_logger
 
@@ -322,6 +323,13 @@ class ContainerTrackingEngine:
                 order_data, order_id, container.container_number
             )
             container_events = self.event_processor.extract_container_events(container_data)
+
+            # ищем самую раннюю дату операции "Отправление вагона со станции"
+            all_events = order_events + container_events
+            result.earliest_railway_loading_date = self._find_earliest_event_date(
+                all_events,
+                "Отправление вагона со станции",
+            )
             
             final_event, has_duplicates, source = self.event_processor.merge_and_deduplicate(
                 order_events, container_events
@@ -351,21 +359,29 @@ class ContainerTrackingEngine:
         written_count = 0
         for container_info, tracking_result in container_results:
             try:
-                mapping = self.firebird_manager.operation_matcher.find_best_mapping(
-                    tracking_result.last_event.operation    # type: ignore
-                ) if tracking_result.last_event else None
+                mapping = (
+                    self.firebird_manager.operation_matcher.find_best_mapping(
+                        tracking_result.last_event.operation
+                    )
+                    if tracking_result.last_event
+                    else None
+                )
 
                 if (
                     mapping
                     and mapping.entity_column
                     == self.firebird_manager.entity_config.date_railway_loading
-                    and container_info.current_dates.get(mapping.entity_column)
                 ):
-                    self.logger.debug(
-                        f"⏭️ {container_info.container_number}: "
-                        f"{mapping.entity_column} уже заполнено"
-                    )
-                    continue
+                    existing = container_info.current_dates.get(mapping.entity_column)
+                    expected = tracking_result.earliest_railway_loading_date
+                    if existing and expected:
+                        existing_dt = self.firebird_manager.transformer.transform_value(existing, "DATE")
+                        expected_dt = self.firebird_manager.transformer.transform_value(expected, "DATE")
+                        if existing_dt == expected_dt:
+                            self.logger.debug(
+                                f"⏭️ {container_info.container_number}: {mapping.entity_column} уже верная"
+                            )
+                            continue
                 # КЛЮЧЕВОЕ: Используем container_info.id для обновления записи
                 success = await self.firebird_manager.update_container_from_tracking(
                     container_info.id,  # ID записи в entity таблице
@@ -373,11 +389,18 @@ class ContainerTrackingEngine:
                 )
                 
                 if success and mapping:
-                    container_info.current_dates[mapping.entity_column] = (
-                        tracking_result.last_event.date
-                        if tracking_result.last_event
-                        else container_info.current_dates.get(mapping.entity_column)
-                    )
+                    if (
+                        mapping.entity_column
+                        == self.firebird_manager.entity_config.date_railway_loading
+                        and tracking_result.earliest_railway_loading_date
+                    ):
+                        container_info.current_dates[mapping.entity_column] = tracking_result.earliest_railway_loading_date
+                    else:
+                        container_info.current_dates[mapping.entity_column] = (
+                            tracking_result.last_event.date
+                            if tracking_result.last_event
+                            else container_info.current_dates.get(mapping.entity_column)
+                        )
 
                 if success:
                     written_count += 1
@@ -416,6 +439,24 @@ class ContainerTrackingEngine:
             return cached_data == current_data
         except:
             return False
+
+    def _find_earliest_event_date(
+        self,
+        events: List[ContainerEvent],
+        operation_name: str,
+    ) -> Optional[str]:
+        """Найти самую раннюю дату события по названию операции"""
+        earliest: Optional[datetime] = None
+
+        for ev in events:
+            if not ev.operation or not ev.date:
+                continue
+            if operation_name.lower() in ev.operation.lower():
+                dt = self.firebird_manager.transformer.transform_value(ev.date, "TIMESTAMP")
+                if dt and (earliest is None or dt < earliest):
+                    earliest = dt
+
+        return earliest.isoformat() if earliest else None
     
     async def _log_final_statistics(self) -> None:
         """Вывод финальной статистики workflow"""

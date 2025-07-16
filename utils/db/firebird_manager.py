@@ -996,7 +996,12 @@ class FirebirdEntityManager:
         update_data = {}
         
         # Получаем значение по полю маппинга
-        if date_mapping.fesco_field == "date":
+        if (
+            date_mapping.entity_column == self.entity_config.date_railway_loading
+            and getattr(tracking_result, "earliest_railway_loading_date", None)
+        ):
+            raw_value = tracking_result.earliest_railway_loading_date
+        elif date_mapping.fesco_field == "date":
             raw_value = getattr(tracking_result.last_event, "date", None)
         elif date_mapping.fesco_field == "remainingDistance":
             raw_value = getattr(tracking_result.last_event, "remainingDistance", None)

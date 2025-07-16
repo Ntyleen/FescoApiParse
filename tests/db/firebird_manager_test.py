@@ -413,6 +413,46 @@ class TestFirebirdStatisticsCollector:
         assert stats.stats['operation_times'][0] == 100.0
         assert stats.stats['operation_times'][-1] == 1099.0
 
+    def test_prepare_update_data_uses_earliest_date(self, entity_config):
+        """Проверка, что для DATE_RAILWAY_LOADING берется самая ранняя дата"""
+        if not FIREBIRD_AVAILABLE:
+            pytest.skip("Firebird driver не установлен")
+
+        manager = FirebirdEntityManager({'host':'h','database':'db','user':'u','password':'p'}, entity_config)
+        mapping = entity_config.date_mappings[entity_config.date_railway_loading]
+        result = TrackingResult(container_number="TEST")
+        result.last_event = ContainerEvent(operation="Отправление вагона со станции", date="2024-01-20")
+        result.earliest_railway_loading_date = "2024-01-15"
+
+        update = manager._prepare_update_data(result, mapping)
+
+        assert mapping.entity_column in update
+        assert str(update[mapping.entity_column]).startswith("2024-01-15")
+
+    @pytest.mark.asyncio
+    @patch('firebird_manager.fdb')
+    async def test_write_results_skip_when_date_matches(self, mock_fdb, entity_config):
+        if not FIREBIRD_AVAILABLE:
+            pytest.skip("Firebird driver не установлен")
+        """Engine не обновляет дату если она уже соответствует"""
+        manager = FirebirdEntityManager({'host':'h','database':'db','user':'u','password':'p'}, entity_config)
+        config = Config()
+        engine = ContainerTrackingEngine(config, MagicMock(), manager)
+
+        container = ContainerInfo(
+            id=1,
+            container_number="TEST",
+            current_dates={entity_config.date_railway_loading: "2024-01-15"},
+        )
+
+        result = TrackingResult(container_number="TEST")
+        result.last_event = ContainerEvent(operation="Отправление вагона со станции", date="2024-01-20")
+        result.earliest_railway_loading_date = "2024-01-15"
+
+        with patch.object(manager, 'update_container_from_tracking', new=AsyncMock()) as mock_update:
+            await engine._write_results_to_firebird([(container, result)])
+            mock_update.assert_not_called()
+
 
 # =============================================================================
 # INTEGRATION TESTS - ИСПРАВЛЕННЫЕ И ДОПОЛНЕННЫЕ

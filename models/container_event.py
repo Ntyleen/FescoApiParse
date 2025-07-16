@@ -36,6 +36,8 @@ class TrackingResult:
     has_duplicates: bool = False
     processing_time: str = ""
     error_message: str | None = None
+    # Специальная дата для операции "Отправление вагона со станции"
+    earliest_railway_loading_date: str | None = None
     
     def __post_init__(self):
         self.processing_time = datetime.now().isoformat()

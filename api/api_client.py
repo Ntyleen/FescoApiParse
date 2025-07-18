@@ -125,7 +125,7 @@ class FescoApiClient:
                 self.logger.debug(f"📊 Получено {response_size} символов")
                 
                 # Сохранение в кэш
-                await self.cache.set(cache_key, data, self.config.cache.ttl_hours * 3600)
+                await self.cache.set(cache_key, data, int(self.config.cache.ttl_hours * 3600))
                 
                 return data
                 

@@ -21,7 +21,7 @@ class RedisCache(CacheBackend):
         
         self.redis_url = redis_url
         self.prefix = prefix
-        self.ttl_seconds = ttl_hours * 3600
+        self.ttl_seconds = int(ttl_hours * 3600)
         self.client: redis.Redis | None = None
         
         logging.info(f"🔄 RedisCache: {redis_url}, prefix: {prefix}, TTL: {ttl_hours}h")
@@ -68,7 +68,7 @@ class RedisCache(CacheBackend):
         try:
             client = await self._get_client()
             full_key = self._make_key(key)
-            ttl = ttl_seconds or self.ttl_seconds
+            ttl = int(ttl_seconds or self.ttl_seconds)
             
             json_data = json.dumps(data, ensure_ascii=False)
             await client.setex(full_key, ttl, json_data)

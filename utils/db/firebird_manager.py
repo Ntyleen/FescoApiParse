@@ -259,7 +259,7 @@ class EntityTableConfig:
             self.remaining_distance: EntityColumnMapping(
                 entity_column=self.remaining_distance,
                 fesco_field="remainingDistance",
-                operation_patterns=(" ",),
+                operation_patterns=("",),
                 priority=10,
                 description="Слежение",
                 column_datatype="INTEGER"

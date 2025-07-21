@@ -64,8 +64,8 @@ class EventProcessor:
                 self.logger.debug(f"🔍 Проверяем {len(containers)} контейнеров в заявке {order_id}")
                 
                 for container in containers:
-                    container_num = container.get("containerNumber", "")
-                    if container_num != container_number:
+                    container_num = container.get("containerNumber", "").strip()
+                    if container_num != container_number.strip():
                         self.logger.debug(f"⏭️ Пропускаем контейнер {container_num}")
                         continue
                     

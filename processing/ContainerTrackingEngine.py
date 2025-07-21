@@ -208,7 +208,7 @@ class ContainerTrackingEngine:
         Обработка группы контейнеров одной заявки
         """
         
-        container_numbers = [c.container_number for c in containers]
+        container_numbers = [c.container_number.strip() for c in containers]
         self.logger.info(f"📡 Обработка заявки {order_id}: {len(containers)} контейнеров")
         
         try:
@@ -283,8 +283,12 @@ class ContainerTrackingEngine:
             if successful_results:
                 await self._write_results_to_firebird(successful_results)
             
+            enriched_summary = self._enrich_summary_with_results(
+                current_order_summary, successful_results
+            )
+
             # Обновляем кэш проверки
-            await self.cache.set(cache_key, current_order_summary, ttl_seconds=3600)
+            await self.cache.set(cache_key, enriched_summary, ttl_seconds=3600)
             
             # Отмечаем заявку как обработанную
             await self.binding_manager.mark_order_processed(order_id)
@@ -344,9 +348,7 @@ class ContainerTrackingEngine:
         self, 
         container_results: List[Tuple[ContainerInfo, TrackingResult]]
     ) -> None:
-        """
-        НОВОЕ: Запись результатов напрямую в Firebird entity таблицу
-        """
+
         
         written_count = 0
         for container_info, tracking_result in container_results:
@@ -354,6 +356,26 @@ class ContainerTrackingEngine:
                 mapping = self.firebird_manager.operation_matcher.find_best_mapping(
                     tracking_result.last_event.operation    # type: ignore
                 ) if tracking_result.last_event else None
+
+                new_remaining_raw = (
+                    tracking_result.last_event.remainingDistance
+                    if tracking_result.last_event else None
+                )
+                new_remaining = None
+                if new_remaining_raw is not None:
+                    new_remaining = self.firebird_manager.transformer.transform_value(
+                        new_remaining_raw, "INTEGER"
+                    )
+
+                if (
+                    new_remaining is not None
+                    and container_info.remaining_distance is not None
+                    and new_remaining == container_info.remaining_distance
+                ):
+                    self.logger.debug(
+                        f"⏭️ {container_info.container_number}: remaining distance unchanged"
+                    )
+                    continue
 
                 if (
                     mapping
@@ -379,6 +401,9 @@ class ContainerTrackingEngine:
                         else container_info.current_dates.get(mapping.entity_column)
                     )
 
+                if success and new_remaining is not None:
+                    container_info.remaining_distance = new_remaining
+
                 if success:
                     written_count += 1
                     self.engine_stats.firebird_updates += 1
@@ -393,12 +418,13 @@ class ContainerTrackingEngine:
         """Извлечь краткую сводку заявки для проверки изменений"""
         
         summary = {}
-        
+        normalized_numbers = {num.strip() for num in container_numbers}
+
         try:
             for order_item in order_data.get("data", []):
                 for container in order_item.get("containers", []):
-                    container_num = container.get("containerNumber", "")
-                    if container_num in container_numbers:
+                    container_num = container.get("containerNumber", "").strip()
+                    if container_num in normalized_numbers:
                         last_event = container.get("lastEvent", {})
                         summary[container_num] = {
                             "date": (last_event.get("date") or "").strip(),
@@ -412,6 +438,46 @@ class ContainerTrackingEngine:
         return summary
     
 
+    def _enrich_summary_with_results(
+        self,
+        summary: dict,
+        container_results: List[Tuple[ContainerInfo, TrackingResult]],
+    ) -> dict:
+        """Дополнить сводку данными из результатов обработки"""
+
+        enriched = {k: v.copy() for k, v in summary.items()}
+
+        for container_info, result in container_results:
+            container_num = container_info.container_number.strip()
+            if not result.last_event:
+                continue
+            last_event = result.last_event
+            event_data = {
+                "date": (last_event.date or "").strip(),
+                "operation": (last_event.operation or "").strip(),
+                "location": (last_event.location or "").strip(),
+                "remainingDistance": (
+                    getattr(last_event, "remainingDistance", "") or ""
+                ).strip(),
+            }
+
+            existing = enriched.get(container_num)
+
+            if not existing or not any(existing.values()):
+                enriched[container_num] = event_data
+            else:
+                if not existing.get("date") and event_data["date"]:
+                    existing["date"] = event_data["date"]
+                if not existing.get("operation") and event_data["operation"]:
+                    existing["operation"] = event_data["operation"]
+                if not existing.get("location") and event_data["location"]:
+                    existing["location"] = event_data["location"]
+                if not existing.get("remainingDistance") and event_data[
+                    "remainingDistance"
+                ]:
+                    existing["remainingDistance"] = event_data["remainingDistance"]
+
+        return enriched
 
     def _data_unchanged(self, cached_data: dict, current_data: dict) -> bool:
         """Проверка изменения данных"""

@@ -278,6 +278,7 @@ class ContainerInfo:
     status_name: str = ""
     line_id: Optional[int] = None
     priority: int = 0
+    remaining_distance: Optional[int] = None
     # created_at: Optional[str] = None
     # updated_at: Optional[str] = None
     
@@ -834,8 +835,7 @@ class FirebirdEntityManager:
             self.entity_config.date_in,
             self.entity_config.date_railway_loading,
             self.entity_config.date_railway_delivery,
-            # "CREATED_AT",
-            # "UPDATED_AT"
+            self.entity_config.remaining_distance,
         ]
         
         query = f"""
@@ -877,8 +877,7 @@ class FirebirdEntityManager:
             status_id=row[2],
             status_name=self._get_status_name(row[2]),
             line_id=row[3],  # LEGAL_PERSON_LINE_ID
-            # created_at=str(row[9]) if row[9] else None,  # CREATED_AT
-            # updated_at=str(row[10]) if row[10] else None,  # UPDATED_AT
+            remaining_distance=int(row[9]) if row[9] is not None else None,
             current_dates={
                 self.entity_config.date_eta: str(row[4]) if row[4] else None,
                 self.entity_config.date_etd: str(row[5]) if row[5] else None,

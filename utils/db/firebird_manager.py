@@ -214,7 +214,7 @@ class EntityTableConfig:
             self.date_eta: EntityColumnMapping(
                 entity_column=self.date_eta,
                 fesco_field="date",
-                operation_patterns=["Грузится на фидер"], # type: ignore
+                operation_patterns=["Выгружается груженным"], # type: ignore
                 priority=10,
                 description="Estimated Time of Arrival",
                 column_datatype="DATE"
@@ -223,7 +223,7 @@ class EntityTableConfig:
             self.date_etd: EntityColumnMapping(
                 entity_column=self.date_etd,
                 fesco_field="date",
-                operation_patterns=["Выгружается груженным"], # type: ignore
+                operation_patterns=["Грузится на фидер", "Loading Feeder Full"], # type: ignore
                 priority=10,
                 description="Estimated Time of Departure",
                 column_datatype="DATE"
@@ -232,7 +232,7 @@ class EntityTableConfig:
             self.date_in: EntityColumnMapping(
                 entity_column=self.date_in,
                 fesco_field="date",
-                operation_patterns=["Прием с моря"], # type: ignore
+                operation_patterns=["Прием с моря", "Регистрация ДО1", "Discharged from vessel", "DO1 registration"], # type: ignore
                 priority=8,
                 description="Выгрузка на терминал",
                 column_datatype="TIMESTAMP"
@@ -241,7 +241,7 @@ class EntityTableConfig:
             self.date_railway_loading: EntityColumnMapping(
                 entity_column=self.date_railway_loading,
                 fesco_field="date",
-                operation_patterns=["Отправление вагона со станции"], # type: ignore
+                operation_patterns=["Отправление вагона со станции", "Wagon has left the station"], # type: ignore
                 priority=8,
                 description="Отгрузка на платформу",
                 column_datatype="DATE"
@@ -250,7 +250,7 @@ class EntityTableConfig:
             self.date_railway_delivery: EntityColumnMapping(
                 entity_column=self.date_railway_delivery,
                 fesco_field="date",
-                operation_patterns=["Добавлен в поручение на отгрузку на ЖД"], # type: ignore
+                operation_patterns=["Документы для отправки по ЖД приняты", "Documents for sending by railway accepted"], # type: ignore
                 priority=8,
                 description="Сдача на ж/д",
                 column_datatype="DATE"

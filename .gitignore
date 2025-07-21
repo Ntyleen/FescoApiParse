@@ -37,3 +37,4 @@ real_redis_diagnosis.py
 sdf.py
 utils/db/bckp.py
 processing/bkcp.py
+.venv.7z

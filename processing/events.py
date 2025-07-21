@@ -3,7 +3,10 @@ from typing import Dict, Any, List, Tuple
 
 from models.container_event import ContainerEvent
 
-# НОВОЕ: Импорт логирования
+from datetime import datetime
+
+from utils.db.firebird_manager import FirebirdDateTransformer
+
 from utils.logging import get_logger
 
 
@@ -21,6 +24,7 @@ class EventProcessor:
         # НОВОЕ: Создаем логгер для обработки событий
         self.logger = get_logger("fesco_tracker.events")
         self.logger.debug("🔄 EventProcessor инициализирован")
+        self.date_transformer = FirebirdDateTransformer()
     
     def extract_order_events(
         self, 
@@ -234,15 +238,19 @@ class EventProcessor:
         # Сортируем по дате (самые новые первыми)
         # Если дата не парсится, событие идет в конец
         def date_key(event: ContainerEvent) -> tuple:
-            try:
-                if event.date:
-                    # Предполагаем формат даты ISO или подобный
-                    return (0, event.date)
-            except:
-                pass
-            return (1, "")  # События без даты идут в конец
+            if not event.date:
+               # Предполагаем формат даты ISO или подобный
+                return (1, "")
+            parsed_date = self.date_transformer.transform_value(event.date, "TIMESTAMP")
+            if parsed_date is None:
+                try:
+                    parsed_date = datetime.strptime(event.date, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    return (1, event.date)
+                    
+            return (0, -parsed_date.timestamp())
         
-        sorted_events = sorted(events, key=date_key, reverse=True)
+        sorted_events = sorted(events, key=date_key)
         best_event = sorted_events[0]
         
         self.logger.debug(f"📅 Выбрано самое свежее событие из {len(events)}: {best_event.date}")

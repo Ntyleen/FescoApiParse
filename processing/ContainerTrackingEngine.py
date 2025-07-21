@@ -401,15 +401,18 @@ class ContainerTrackingEngine:
                     if container_num in container_numbers:
                         last_event = container.get("lastEvent", {})
                         summary[container_num] = {
-                            "date": last_event.get("date"),
-                            "operation": last_event.get("text"),
-                            "location": last_event.get("location")
+                            "date": (last_event.get("date") or "").strip(),
+                            "operation": (last_event.get("text") or "").strip(),
+                            "location": (last_event.get("location") or "").strip(),
+                            "remainingDistance": (last_event.get("remainingDistance") or "").strip(),
                         }
         except Exception as e:
             self.logger.debug(f"Ошибка извлечения сводки: {e}")
         
         return summary
     
+
+
     def _data_unchanged(self, cached_data: dict, current_data: dict) -> bool:
         """Проверка изменения данных"""
         try:

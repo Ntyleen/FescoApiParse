@@ -17,7 +17,7 @@ class RedisNamespace(ABC):
     def __init__(self, manager: 'RedisManager', prefix: str, config: RedisConfig):
         self.manager = manager
         self.prefix = prefix
-        self.default_ttl= config.default_ttl * 3600
+        self.default_ttl_seconds = int(config.default_ttl_hours * 3600)
         self.logger = get_logger(f"redis.{prefix.rstrip(':')}")
     
     def _make_key(self, key: str) -> str:
@@ -60,7 +60,7 @@ class CacheNamespace(RedisNamespace):
         try:
             client = await self._get_client()
             full_key = self._make_key(key)
-            ttl = ttl_seconds or self.manager.config.default_ttl
+            ttl = int(ttl_seconds or self.default_ttl_seconds)
             
             json_data = json.dumps(data, ensure_ascii=False)
             await client.setex(full_key, ttl, json_data)
@@ -127,11 +127,12 @@ class BindingNamespace(RedisNamespace):
             pipe = client.pipeline()
             
             # Привязка контейнер → заявка
-            pipe.setex(container_key, self.manager.config.default_ttl, order_id)
+            ttl = self.default_ttl_seconds
+            pipe.setex(container_key, ttl, order_id)
             
             # Добавляем контейнер в список заявки
             pipe.sadd(order_key, container_number)
-            pipe.expire(order_key, self.manager.config.default_ttl)
+            pipe.expire(order_key, ttl)
             
             await pipe.execute()
             

@@ -57,13 +57,15 @@ class RedisConfig:
     decode_responses: bool = True
     
     # Настройки для разных namespace'ов
-    default_ttl: int = 3600
+    default_ttl_hours: float = 1.0
     cache_prefix: str = "fesco_cache:"
     binding_prefix: str = "fesco_bindings:"
     
     def __post_init__(self):
         if not self.url.startswith(("redis://", "rediss://")):
             raise ConfigError(f"Неверный формат Redis URL: {self.url}")
+        if self.default_ttl_hours <= 0:
+            raise ConfigError("default_ttl_hours должен быть положительным")
 
 
 @dataclass

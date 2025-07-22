@@ -288,7 +288,8 @@ class ContainerTrackingEngine:
             )
 
             # Обновляем кэш проверки
-            await self.cache.set(cache_key, enriched_summary, ttl_seconds=3600)
+            ttl_seconds = self.config.cache.ttl_hours * 3600
+            await self.cache.set(cache_key, enriched_summary, ttl_seconds=ttl_seconds)
             
             # Отмечаем заявку как обработанную
             await self.binding_manager.mark_order_processed(order_id)
@@ -378,13 +379,39 @@ class ContainerTrackingEngine:
                     continue
 
                 if mapping and mapping.entity_column in container_info.current_dates:
-                    new_value = tracking_result.last_event.date if tracking_result.last_event else None
+                    new_value = (
+                        tracking_result.last_event.date if tracking_result.last_event else None
+                    )
                     stored_value = container_info.current_dates.get(mapping.entity_column)
-                    if new_value is None or str(new_value) == str(stored_value):
+
+                    if new_value is None:
                         self.logger.debug(
-                            f"⏭️ {container_info.container_number}: no change for {mapping.entity_column}"
+                            f"⏭️ {container_info.container_number}: empty value for {mapping.entity_column}"
                         )
                         continue
+
+                    if stored_value:
+                        parsed_new = self.firebird_manager.transformer.transform_value(
+                            new_value, mapping.column_datatype
+                        )
+                        parsed_stored = self.firebird_manager.transformer.transform_value(
+                            stored_value, mapping.column_datatype
+                        )
+
+                        if (
+                            parsed_new is not None
+                            and parsed_stored is not None
+                            and parsed_new >= parsed_stored
+                        ):
+                            self.logger.debug(
+                                f"⏭️ {container_info.container_number}: existing {mapping.entity_column} {stored_value} is earlier"
+                            )
+                            continue
+                        if parsed_new is None:
+                            self.logger.debug(
+                                f"⏭️ {container_info.container_number}: unable to parse new value for {mapping.entity_column}"
+                            )
+                            continue
                 # КЛЮЧЕВОЕ: Используем container_info.id для обновления записи
                 success = await self.firebird_manager.update_container_from_tracking(
                     container_info.id,  # ID записи в entity таблице

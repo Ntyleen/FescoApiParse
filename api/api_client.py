@@ -88,12 +88,11 @@ class FescoApiClient:
         endpoint = url.replace(self.config.api.base_url, "")
         self.logger.debug(f"🌐 Запрос: {endpoint}")
         
-        # Проверяем кэш
+        # Проверяем кэш, но не прерываем запрос
         cached_data = await self.cache.get(cache_key)
         if cached_data:
             self.stats.cached_requests += 1
             self.logger.debug(f"💾 Cache HIT: {cache_key}")
-            return cached_data
         
         # Выполняем HTTP запрос
         try:
@@ -124,9 +123,12 @@ class FescoApiClient:
                 response_size = len(str(data))
                 self.logger.debug(f"📊 Получено {response_size} символов")
                 
-                # Сохранение в кэш
-                await self.cache.set(cache_key, data, int(self.config.cache.ttl_hours * 3600))
-                
+                # Сохранение в кэш только при изменении данных
+                if cached_data != data:
+                    await self.cache.set(cache_key, data, int(self.config.cache.ttl_hours * 3600))
+                else:
+                    self.logger.debug(f"💾 Cache unchanged, skip update: {cache_key}")
+
                 return data
                 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:

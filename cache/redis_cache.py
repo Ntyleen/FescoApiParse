@@ -126,7 +126,10 @@ class RedisCache(CacheBackend):
         """Закрыть соединение с Redis"""
         if self.client:
             try:
-                await self.client.close()
+                if hasattr(self.client, "aclose"):
+                    await self.client.aclose()
+                else:
+                    await self.client.close()
                 logging.info("🔄 Redis connection closed")
             except Exception as e:
                 logging.error(f"Redis close error: {e}")

@@ -123,7 +123,10 @@ class RedisManager:
     async def close(self) -> None:
         """Закрыть все соединения"""
         if self._client:
-            await self._client.close()
+            if hasattr(self._client, "aclose"):
+                await self._client.aclose()
+            else:
+                await self._client.close()
             self.logger.info("Redis connections closed")
             self._client = None
 

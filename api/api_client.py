@@ -38,7 +38,8 @@ class FescoApiClient:
         self.config = config
         self.cache = cache
         self.stats = stats
-        
+        self.no_order_prefix = "no_order:"
+
         # Создаем логгер для API клиента
         self.logger = get_logger("fesco_tracker.api")
         
@@ -195,6 +196,15 @@ class FescoApiClient:
         container_logger.debug("🔍 Поиск заявки по контейнеру")
         
         try:
+            # Проверяем отрицательный кэш
+            no_order_key = f"{self.no_order_prefix}{container_number}"
+            exists = await self.cache.exists(no_order_key)
+            if exists is True:
+                container_logger.debug(
+                    f"💾 NO_ORDER HIT: {container_number}"
+                )
+                return None
+
             cache_key = f"order_lookup:{container_number}"
             url = f"{self.config.api.base_url}orders"
             
@@ -213,6 +223,11 @@ class FescoApiClient:
                     return str(order_id)
             
             container_logger.warning("⚠️ Заявка не найдена")
+            await self.cache.set(
+                no_order_key,
+                {"no_order": True},
+                int(self.config.cache.ttl_hours * 3600),
+            )
             return None
             
         except Exception as e:

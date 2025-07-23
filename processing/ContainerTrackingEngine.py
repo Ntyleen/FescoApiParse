@@ -162,7 +162,12 @@ class ContainerTrackingEngine:
             container_number = container.container_number
             
             self.logger.debug(f"🔍 Обработка контейнера: {container_number}")
-            
+
+            # Пропускаем контейнеры, для которых заявка ранее не была найдена
+            if await self.binding_manager.is_container_no_order(container_number):
+                self.logger.debug(f"⏭️ Контейнер {container_number} помечен как без заявки")
+                continue
+
             # Шаг 1: Проверяем существующую привязку
             existing_order = await self.binding_manager.get_container_order(container_number)
             
@@ -184,6 +189,7 @@ class ContainerTrackingEngine:
                 
                 if not order_id:
                     self.logger.warning(f"⚠️ Заявка не найдена для {container_number}")
+                    await self.binding_manager.mark_container_no_order(container_number)
                     continue
                 
                 # Шаг 3: Привязываем контейнер к заявке

@@ -29,6 +29,7 @@ class ContainerBindingManager:
         self.CONTAINER_KEY_PREFIX = "container_to_order:"
         self.ORDER_KEY_PREFIX = "order_to_containers:"
         self.PROCESSED_ORDERS_KEY = "processed_orders"
+        self.NO_ORDER_PREFIX = "no_order:"
         
         self.logger.debug("🔗 ContainerBindingManager инициализирован")
     
@@ -180,6 +181,32 @@ class ContainerBindingManager:
         except Exception as e:
             self.logger.error(f"❌ Ошибка отметки заявки {order_id}: {e}")
             return False
+
+    async def mark_container_no_order(self, container_number: str) -> bool:
+        """Отметить контейнер как не имеющий заявки"""
+        try:
+            key = f"{self.NO_ORDER_PREFIX}{container_number}"
+            await self.cache.set(key, {"no_order": True}, ttl_seconds=86400)
+            self.logger.debug(
+                f"🚫 Контейнер {container_number} отмечен как без заявки"
+            )
+            return True
+        except Exception as e:
+            self.logger.error(
+                f"❌ Ошибка отметки контейнера {container_number} без заявки: {e}"
+            )
+            return False
+
+    async def is_container_no_order(self, container_number: str) -> bool:
+        """Проверить, отмечен ли контейнер как не имеющий заявки"""
+        try:
+            key = f"{self.NO_ORDER_PREFIX}{container_number}"
+            return await self.cache.exists(key)
+        except Exception as e:
+            self.logger.error(
+                f"❌ Ошибка проверки отметки контейнера {container_number}: {e}"
+            )
+            return False
     
     async def should_process_container(self, container_number: str, order_id: str) -> bool:
         """
@@ -198,6 +225,13 @@ class ContainerBindingManager:
             True если нужно обрабатывать
         """
         
+        # Сначала проверяем, не помечен ли контейнер как не имеющий заявки
+        if await self.is_container_no_order(container_number):
+            self.logger.debug(
+                f"⏭️ Контейнер {container_number} помечен как без заявки"
+            )
+            return False
+
         # Проверяем привязку контейнера
         existing_order = await self.get_container_order(container_number)
         

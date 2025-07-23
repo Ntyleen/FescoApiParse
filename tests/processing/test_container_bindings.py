@@ -80,3 +80,17 @@ async def test_should_process_container_logic():
     assert await manager.get_container_order("CONT1") == "ORD2"
     assert await manager.get_order_containers("ORD1") == []
     assert await manager.get_order_containers("ORD2") == ["CONT1"]
+
+
+@pytest.mark.asyncio
+async def test_mark_container_no_order():
+    cache = DummyCache()
+    manager = ContainerBindingManager(cache)
+
+    assert await manager.is_container_no_order("CONTX") is False
+    await manager.mark_container_no_order("CONTX")
+    assert await manager.is_container_no_order("CONTX") is True
+
+    # when marked, should_process_container should skip
+    should = await manager.should_process_container("CONTX", "ORD1")
+    assert should is False

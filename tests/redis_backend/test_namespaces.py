@@ -70,6 +70,27 @@ async def test_binding_namespace_operations():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(fakeredis is None, reason="fakeredis not installed")
+async def test_binding_namespace_applies_ttl():
+    fake = fakeredis.FakeRedis(decode_responses=True)
+    with patch('utils.redis_backend.redis_manager.redis_async.from_url', return_value=fake):
+        config = RedisConfig(binding_prefix='bind:', default_ttl_hours=0.001)
+        manager = RedisManager(config)
+        ns = manager.get_binding_namespace()
+
+        await ns.bind_container_to_order('C1', 'O1')
+
+        expected_ttl = int(config.default_ttl_hours * 3600)
+        container_key = 'bind:container:C1'
+        order_key = 'bind:order:O1'
+        ttl_container = await fake.ttl(container_key)
+        ttl_order = await fake.ttl(order_key)
+
+        assert 0 < ttl_container <= expected_ttl
+        assert 0 < ttl_order <= expected_ttl
+
+
+@pytest.mark.asyncio
 async def test_cache_adapter_delegates():
     namespace = AsyncMock()
     manager = MagicMock()

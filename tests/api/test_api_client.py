@@ -35,11 +35,16 @@ def client():
 async def test_make_request_cache_hit(client):
     api, session, cache, stats = client
     cache.get.return_value = {"hit": True}
+    response = AsyncMock()
+    response.status = 200
+    response.headers = {"content-type": "application/json"}
+    response.json.return_value = {"hit": True}
+    session.get.return_value.__aenter__.return_value = response
 
     result = await api._make_request(session, "https://example.com/test", "key")
 
     assert result == {"hit": True}
-    session.get.assert_not_called()
+    session.get.assert_called_once()
     cache.set.assert_not_called()
     assert stats.cached_requests == 1
 

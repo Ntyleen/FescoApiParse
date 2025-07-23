@@ -107,3 +107,57 @@ async def test_run_full_workflow_groups_and_updates():
     assert sorted(order_calls) == [("ORD1", 2), ("ORD2", 1)]
     assert firebird.updated == [1, 2, 3]
 
+@pytest.mark.asyncio
+async def test_skip_update_if_existing_date_is_earlier():
+    container = ContainerInfo(
+        id=10,
+        container_number="CONT4",
+        line_id=1,
+        current_dates={"DATE_RAILWAY_LOADING": "2024-01-01"},
+    )
+    firebird = DummyFirebirdManager([container])
+    mapping = MagicMock()
+    mapping.entity_column = "DATE_RAILWAY_LOADING"
+    mapping.column_datatype = "DATE"
+    firebird.operation_matcher.find_best_mapping.return_value = mapping
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(
+            date="2024-02-01",
+            operation="Отправление вагона со станции",
+            location="Test",
+        )
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert firebird.updated == []
+
+@pytest.mark.asyncio
+async def test_skip_container_with_no_order():
+    containers = [
+        ContainerInfo(id=1, container_number="CONT1", line_id=1, current_dates={}),
+    ]
+    firebird = DummyFirebirdManager(containers)
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value=None)
+    stats = await engine.run_full_workflow(batch_size=10)
+
+    # Container should be marked and skipped
+    assert stats.containers_loaded == 1
+    assert stats.orders_processed == 0
+    assert await engine.binding_manager.is_container_no_order("CONT1") is True

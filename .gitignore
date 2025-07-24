@@ -11,7 +11,8 @@ __pycache__*
 *.yaml
 *.yml
 *.gitlab-ci.yml
-
+*.patch
+*.7z
 ### deploy
 !deploy/config/app_global.yaml
 config/sosal.py

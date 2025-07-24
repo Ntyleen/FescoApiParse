@@ -16,10 +16,17 @@ def setup_logging_from_config(logging_config: 'LoggingConfig') -> None:
     Args:
         logging_config: Объект конфигурации логирования из YAML
     """
+    log_file = None
+    if hasattr(logging_config, "get_file_path"):
+        path = logging_config.get_file_path()
+        log_file = str(path) if path else None
+    else:
+        log_file = logging_config.file
+
     
     setup_logging(
         level=logging_config.level,
-        log_file=logging_config.file,
+        log_file=log_file,
         format_string=logging_config.format,
         date_format=logging_config.date_format,
         external_levels=logging_config.external_levels

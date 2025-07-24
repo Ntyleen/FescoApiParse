@@ -499,7 +499,7 @@ def get_processing_capabilities() -> dict:
     return capabilities
 
 
-def create_processing_config(environment: str = "development") -> dict:
+def create_processing_config(environment: str = "production") -> dict:
     """
     Создать рекомендуемую конфигурацию для processing модуля
     

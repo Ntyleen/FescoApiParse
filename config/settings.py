@@ -184,6 +184,18 @@ class LoggingConfig:
         if self.level.upper() not in valid_levels:
             raise ConfigError(f"Неверный уровень логирования: {self.level}")
 
+    def get_file_path(self) -> Optional[Path]:
+        if not self.file:
+            return None
+
+        filename = self.file.format(
+            date=datetime.now().strftime("%d.%m.%Y"),
+            time=datetime.now().strftime("%H.%M.%S"),
+            timestamp=int(datetime.now().timestamp()),
+        )
+        path = Path(filename)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
 @dataclass
 class OutputConfig:
@@ -222,6 +234,17 @@ class ProcessingConfig:
             raise ConfigError("batch_size должен быть положительным")
         if self.pause_between_batches < 0:
             raise ConfigError("pause_between_batches не может быть отрицательным")
+
+
+@dataclass
+class SchedulerConfig:
+    """Configuration for background scheduler"""
+    enabled: bool = False
+    cron: str = "0 * * * *"
+
+    def __post_init__(self):
+        if not isinstance(self.enabled, bool):
+            raise ConfigError("enabled должен быть bool")
 
 
 class EnvironmentSubstitutor:
@@ -295,6 +318,7 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     database: FirebirdDatabaseConfig = field(default_factory=FirebirdDatabaseConfig)
 
     
@@ -320,7 +344,7 @@ class Config:
         
         # Определение окружения
         if environment is None:
-            environment = os.getenv("ENVIRONMENT", "local")
+            environment = os.getenv("ENVIRONMENT", "production")
         
         # Путь к директории конфигурации
         config_dir = Path("./deploy/config/")
@@ -329,7 +353,6 @@ class Config:
         base_files = [
             config_dir / "app_global.yaml",
             config_dir / f"{environment}.yaml",
-        #    config_dir / "local.yaml"  # Локальные переопределения
         ]
         
         # Добавляем пользовательские файлы
@@ -442,13 +465,15 @@ class Config:
         logging_config = LoggingConfig(**config_dict.get("logging", {}))
         output_config = OutputConfig(**config_dict.get("output", {}))
         processing_config = ProcessingConfig(**config_dict.get("processing", {}))
-        
+        scheduler_config = SchedulerConfig(**config_dict.get("scheduler", {}))
+
         return cls(
             api=api_config,
             cache=cache_config,
             logging=logging_config,
             output=output_config,
             processing=processing_config,
+            scheduler=scheduler_config,
             database=database_config,
         )
     

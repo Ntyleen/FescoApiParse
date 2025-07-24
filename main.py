@@ -26,12 +26,13 @@ from config import load_config
 from utils.logging import setup_logging_from_config, get_logger
 from cache import create_cache
 from models.processing_stats import ProcessingStats
+from utils.scheduler import FescoScheduler
 
 
 class FescoTracker:
     """Главный класс приложения"""
     
-    def __init__(self, environment: str = "development"):
+    def __init__(self, environment: str = "production"):
         self.environment = environment
         self.config = None
         self.logger = None
@@ -350,7 +351,7 @@ def create_parser():
     parser.add_argument(
         '--env', '--environment',
         choices=['development', 'production', 'test'],
-        default='development',
+        default='production',
         help='Окружение для запуска'
     )
     
@@ -390,7 +391,13 @@ def create_parser():
     
     # Monitor mode
     monitor_parser = subparsers.add_parser('monitor', help='Мониторинг системы')
-    
+
+    # Schedule mode
+    sched_parser = subparsers.add_parser('schedule', help='Запуск по расписанию')
+    sched_parser.add_argument('--cron', help='CRON выражение', default=None)
+    sched_parser.add_argument('--batch-size', type=int, default=None,
+                              help='Размер батча для обработки')
+
     return parser
 
 
@@ -422,7 +429,16 @@ async def main():
         
         elif args.mode == 'monitor':
             await app.run_monitor_mode()
-        
+
+        elif args.mode == 'schedule':
+            cron = args.cron or app.config.scheduler.cron
+            batch_size = args.batch_size or app.config.processing.batch_size
+            scheduler = FescoScheduler()
+            scheduler.add_job(app.run_db_mode, cron=cron, args=[batch_size])
+            scheduler.start()
+            # Run indefinitely
+            await asyncio.Event().wait()
+
         else:
             parser.print_help()
             sys.exit(1)

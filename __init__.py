@@ -30,7 +30,7 @@ __description__ = "Container tracking system with YAML configuration"
 
 async def quick_track_containers(
     container_numbers: list,
-    environment: str = "development",
+    environment: str = "production",
     output_file: str = None # type: ignore
 ) -> list:
     """

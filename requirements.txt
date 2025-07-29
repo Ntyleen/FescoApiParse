@@ -6,7 +6,6 @@ firebird-base==1.8.0
 firebird-driver==1.10.11
 hiredis==3.2.1
 psutil==7.0.0
-pytest==8.4.1
 python-dotenv==1.1.1
 PyYAML==6.0.2
 redis==6.2.0

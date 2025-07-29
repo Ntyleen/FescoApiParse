@@ -20,7 +20,7 @@ cache:
   ttl_hours: 1
   
   # Файловый кэш
-  dir: "./FescoApiParse/cache/"
+  dir: "./app_cache/"
   
   # Redis настройки (используются только если type: "redis")
   redis:
@@ -49,7 +49,7 @@ logging:
 
 # Настройки вывода результатов
 output:
-  dir: "./FescoApiParse/output/"
+  dir: "./app_output/"
   filename: "fesco_tracking_results.json"
   sort_by_container: true
   include_metadata: true

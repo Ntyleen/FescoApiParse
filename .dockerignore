@@ -1,15 +1,19 @@
 ### Test outputs and cache files
 logs/
 __pycache__*
+
 #### .env, configs
-*.env
-*.yaml
 *.yml
 *.gitlab-ci.yml
 *.patch
 *.7z
+
 ### deploy
-!deploy/config/app_global.yaml
+deploy/config/local.yaml
+deploy/config/development.yaml
+deploy/.env/dev.env
+deploy/.env/local.env
+deploy/docker/
 
 ### Virtual environment\
 .venv/
@@ -19,5 +23,5 @@ __pycache__*
 .vscode/
 .idea/
 .gitignore
-fesco_launcher.ps1
-tree.txt
+*.md
+*.ps1

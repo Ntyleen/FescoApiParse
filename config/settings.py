@@ -150,7 +150,7 @@ class CacheConfig:
     """Конфигурация кэширования"""
     type: str = "file"  # "file" или "redis"
     ttl_hours: float = 1.0
-    dir: str = "./FescoApiParse/cache/"
+    dir: str = "./app_cache/"
     redis: RedisConfig = field(default_factory=RedisConfig)
     cache_prefix: str = "cache_fesco:"
     binding_prefix: str = "bindings_fesco:"
@@ -200,7 +200,7 @@ class LoggingConfig:
 @dataclass
 class OutputConfig:
     """Конфигурация вывода результатов"""
-    dir: str = "./FescoApiParse/output/"
+    dir: str = "./app_output/"
     filename: str = "fesco_tracking_results.json"
     pretty_print: bool = True
     sort_by_container: bool = True

@@ -14,9 +14,18 @@ if PARENT_DIR not in sys.path:
 
 def _import_firebird_modules():
     import importlib
+    import types
     sys.modules["utils"] = importlib.import_module("FescoApiParse.utils")
     sys.modules["models"] = importlib.import_module("FescoApiParse.models")
-    fm = importlib.import_module("FescoApiParse.utils.db.firebird_manager")
+
+    models_mod = importlib.import_module("FescoApiParse.utils.db.models")
+    transformer_mod = importlib.import_module("FescoApiParse.utils.db.transformer")
+    manager_mod = importlib.import_module("FescoApiParse.utils.db.firebird_manager")
+    fm = types.SimpleNamespace(
+        EntityColumnMapping=models_mod.EntityColumnMapping,
+        FirebirdDateTransformer=transformer_mod.FirebirdDateTransformer,
+        validate_firebird_config=manager_mod.validate_firebird_config,
+    )
     di = importlib.import_module("FescoApiParse.utils.db.database_init")
     return fm, di
 

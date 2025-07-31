@@ -16,11 +16,11 @@ from processing.events import EventProcessor
 
 # НОВОЕ: Прямой импорт Firebird компонентов
 from utils.db.firebird_manager import (
-    FirebirdEntityManager, 
+    FirebirdEntityManager,
     ContainerInfo,
-    EntityTableConfig,
-    create_firebird_entity_manager
+    create_firebird_entity_manager,
 )
+from utils.db.models import EntityTableConfig
 
 from models.container_event import TrackingResult
 from models.processing_stats import ProcessingStats

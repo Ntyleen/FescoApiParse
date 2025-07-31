@@ -8,12 +8,14 @@
 # Firebird компоненты (основные для enterprise)
 from .firebird_manager import (
     FirebirdEntityManager,
-    EntityTableConfig, 
-    EntityColumnMapping,
-    EntityStatusID,
     ContainerInfo,
     create_firebird_entity_manager,
-    validate_firebird_config
+    validate_firebird_config,
+)
+from .models import (
+    EntityTableConfig,
+    EntityColumnMapping,
+    EntityStatusID,
 )
 
 # Generic компоненты (для совместимости и гибкости)
@@ -378,7 +380,7 @@ async def test_database_connections(config: dict) -> dict:
     try:
         if db_type == 'firebird':
             # Тестируем Firebird
-            from .firebird_manager import FirebirdConnectionManager
+            from .connection import FirebirdConnectionManager
             
             connection_manager = FirebirdConnectionManager(config)
             success = await connection_manager.test_connection()

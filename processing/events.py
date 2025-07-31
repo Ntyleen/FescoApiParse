@@ -5,7 +5,7 @@ from models.container_event import ContainerEvent
 
 from datetime import datetime
 
-from utils.db.firebird_manager import FirebirdDateTransformer
+from utils.db.transformer import FirebirdDateTransformer
 
 from utils.logging import get_logger
 

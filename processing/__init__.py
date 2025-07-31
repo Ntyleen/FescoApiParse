@@ -41,13 +41,15 @@ from .ContainerTrackingEngine import (
 try:
     from utils.db.firebird_manager import (
         FirebirdEntityManager,
-        EntityTableConfig,
-        EntityColumnMapping,
-        EntityStatusID,
         ContainerInfo,
         create_firebird_entity_manager,
         validate_firebird_config,
-        FIREBIRD_AVAILABLE
+        FIREBIRD_AVAILABLE,
+    )
+    from utils.db.models import (
+        EntityTableConfig,
+        EntityColumnMapping,
+        EntityStatusID,
     )
 except ImportError:
     FIREBIRD_AVAILABLE = False

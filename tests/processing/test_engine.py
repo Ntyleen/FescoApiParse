@@ -47,6 +47,7 @@ class DummyFirebirdManager:
         mapping = MagicMock()
         mapping.entity_column = "DATE_ETA"
         self.operation_matcher = MagicMock(find_best_mapping=MagicMock(return_value=mapping))
+        self.transformer = MagicMock(transform_value=lambda v, t: v)
 
     async def test_connection(self):
         return True
@@ -143,6 +144,45 @@ async def test_skip_update_if_existing_date_is_earlier():
     await engine.run_full_workflow(batch_size=10)
 
     assert firebird.updated == []
+
+@pytest.mark.asyncio
+async def test_update_remaining_distance_when_date_skipped():
+    container = ContainerInfo(
+        id=20,
+        container_number="CONT5",
+        line_id=1,
+        current_dates={"DATE_RAILWAY_LOADING": "2024-01-01"},
+        remaining_distance=10000,
+    )
+    firebird = DummyFirebirdManager([container])
+    mapping = MagicMock()
+    mapping.entity_column = "DATE_RAILWAY_LOADING"
+    mapping.column_datatype = "DATE"
+    firebird.operation_matcher.find_best_mapping.return_value = mapping
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(
+            date="2024-02-01",
+            operation="Отправление вагона со станции",
+            location="Test",
+            remainingDistance="500",
+        )
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert firebird.updated == [20]
 
 @pytest.mark.asyncio
 async def test_skip_container_with_no_order():

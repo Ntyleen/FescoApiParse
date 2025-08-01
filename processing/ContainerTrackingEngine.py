@@ -22,7 +22,7 @@ from utils.db.firebird_manager import (
     create_firebird_entity_manager
 )
 
-from models.container_event import TrackingResult
+from models.container_event import TrackingResult, ContainerEvent
 from models.processing_stats import ProcessingStats
 from utils.logging import get_logger
 
@@ -404,6 +404,7 @@ class ContainerTrackingEngine:
                             stored_value, mapping.column_datatype
                         )
 
+                        skip_date = False
                         if (
                             parsed_new is not None
                             and parsed_stored is not None
@@ -412,12 +413,36 @@ class ContainerTrackingEngine:
                             self.logger.debug(
                                 f"⏭️ {container_info.container_number}: existing {mapping.entity_column} {stored_value} is earlier"
                             )
-                            continue
-                        if parsed_new is None:
+                            skip_date = True
+                        elif parsed_new is None:
                             self.logger.debug(
                                 f"⏭️ {container_info.container_number}: unable to parse new value for {mapping.entity_column}"
                             )
                             continue
+
+                        if skip_date:
+                            if (
+                                new_remaining is None
+                                or (
+                                    container_info.remaining_distance is not None
+                                    and new_remaining == container_info.remaining_distance
+                                )
+                            ):
+                                continue
+
+                            tmp_event = ContainerEvent(
+                                date=None,
+                                type=tracking_result.last_event.type,
+                                location=tracking_result.last_event.location,
+                                operation=tracking_result.last_event.operation,
+                                transport=tracking_result.last_event.transport,
+                                remainingDistance=tracking_result.last_event.remainingDistance,
+                            )
+                            tracking_result = TrackingResult(
+                                container_number=tracking_result.container_number,
+                                order_id=tracking_result.order_id,
+                                last_event=tmp_event,
+                            )
                 # КЛЮЧЕВОЕ: Используем container_info.id для обновления записи
                 success = await self.firebird_manager.update_container_from_tracking(
                     container_info.id,  # ID записи в entity таблице
@@ -460,7 +485,7 @@ class ContainerTrackingEngine:
                             "date": (last_event.get("date") or "").strip(),
                             "operation": (last_event.get("text") or "").strip(),
                             "location": (last_event.get("location") or "").strip(),
-                            "remainingDistance": (last_event.get("remainingDistance") or "").strip(),
+                            "remainingDistance": str(last_event.get("remainingDistance") or "").strip(),
                         }
         except Exception as e:
             self.logger.debug(f"Ошибка извлечения сводки: {e}")
@@ -486,7 +511,7 @@ class ContainerTrackingEngine:
                 "date": (last_event.date or "").strip(),
                 "operation": (last_event.operation or "").strip(),
                 "location": (last_event.location or "").strip(),
-                "remainingDistance": (
+                "remainingDistance": str(
                     getattr(last_event, "remainingDistance", "") or ""
                 ).strip(),
             }

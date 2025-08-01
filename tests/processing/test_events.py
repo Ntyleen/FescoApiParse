@@ -114,3 +114,22 @@ def test_merge_different_events_prefers_container(processor, sample_order_data, 
     assert source == "container"
     assert dedup is False
     assert merged.operation == "Погружен"
+
+
+def test_remaining_distance_from_order(processor, sample_order_data, different_container_data):
+    """Container event chosen but remaining distance should come from order data"""
+    order_events = processor.extract_order_events(sample_order_data, "ORD123", "CONT1")
+    container_events = processor.extract_container_events(different_container_data)
+
+    # Sanity check: container event has a different remainingDistance
+    assert container_events[0].remainingDistance == "500"
+    assert order_events[0].remainingDistance == "1000"
+
+    merged, dedup, source = processor.merge_and_deduplicate(order_events, container_events)
+
+    # Container event should be selected due to newer date
+    assert source == "container"
+    assert merged.operation == "Погружен"
+
+    # But remainingDistance must come from order data
+    assert merged.remainingDistance == "1000"

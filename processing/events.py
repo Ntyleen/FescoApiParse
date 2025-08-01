@@ -172,7 +172,14 @@ class EventProcessor:
         
         # Случай 4: События из обоих источников - нужна дедупликация
         self.logger.debug("🔀 Объединение событий из двух источников")
-        return self._merge_events(order_events, container_events)
+        final_event, has_duplicates, source = self._merge_events(order_events, container_events)
+
+        # Используем значение remainingDistance из заявки, если оно есть
+        best_order_event = self._get_best_event(order_events)
+        if best_order_event and best_order_event.remainingDistance:
+            final_event.remainingDistance = best_order_event.remainingDistance
+
+        return final_event, has_duplicates, source
     
     def _merge_events(
         self, 

@@ -69,7 +69,8 @@ BrokerDatabase:
   container_column: "NAME"
   status_column: "SP_ENTITY_STATUS"
   line_column: "LEGAL_PERSON_LINE_ID"
-  
+  railway_carrier_column: "LEGAL_PERSON_RAILWAY_CARRIER_ID"
+
   # === КОЛОНКИ ДАТ ===
   date_eta: "DATE_ETA"
   date_etd: "DATE_ETD"
@@ -80,7 +81,8 @@ BrokerDatabase:
   
   # === НАСТРОЙКИ ОБРАБОТКИ ===
   excluded_status_ids: [8, 9, 24]
-  target_line_ids: 451  
+  target_line_ids: 451
+  target_railway_carrier_ids: [451, 759]  
   batch_size: 100
   max_connections: 10
 ---

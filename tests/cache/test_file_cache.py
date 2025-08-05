@@ -34,3 +34,18 @@ async def test_file_cache_operations(tmp_path):
     await cache.clear()
     assert await cache.get(key) is None
     assert await cache.exists(key) is False
+
+
+@pytest.mark.asyncio
+async def test_file_cache_ttl_zero_expires_immediately(tmp_path):
+    """Items expire instantly when ttl_hours is 0."""
+    cache = FileCache(tmp_path, ttl_hours=0)
+    key = "instant"
+    data = {"foo": "bar"}
+
+    await cache.set(key, data)
+    cache_path = cache._get_cache_path(key)
+    assert cache_path.exists()
+
+    assert await cache.get(key) is None
+    assert not cache_path.exists()

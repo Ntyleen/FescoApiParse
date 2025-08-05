@@ -114,3 +114,28 @@ def test_merge_different_events_prefers_container(processor, sample_order_data, 
     assert source == "container"
     assert dedup is False
     assert merged.operation == "Погружен"
+
+
+def test_get_best_event_with_malformed_dates(processor):
+    events = [
+        ContainerEvent(date="2024-01-01 10:00:00", operation="old"),
+        ContainerEvent(date="invalid-date", operation="bad"),
+        ContainerEvent(date="2024-05-10 15:30:00", operation="new"),
+        ContainerEvent(date=None, operation="missing"),
+    ]
+    best = processor._get_best_event(events)
+    assert best.operation == "new"
+
+
+def test_choose_better_event_more_fields(processor):
+    less = ContainerEvent(date="2024-01-01", location="Loc")
+    more = ContainerEvent(date="2024-01-01", location="Loc", operation="Op", transport="Ship")
+    chosen = processor._choose_better_event(less, more)
+    assert chosen is more
+
+
+def test_choose_better_event_prefers_transport_on_tie(processor):
+    no_transport = ContainerEvent(date="2024-01-01", location="Loc", operation="Op", remainingDistance="10")
+    with_transport = ContainerEvent(date="2024-01-01", location="Loc", operation="Op", transport="Train")
+    chosen = processor._choose_better_event(no_transport, with_transport)
+    assert chosen is with_transport

@@ -87,7 +87,8 @@ class FirebirdDatabaseConfig:
     container_column: str = "NAME"
     status_column: str = "SP_ENTITY_STATUS"
     line_column: str = "LEGAL_PERSON_LINE_ID"
-    
+    railway_carrier_column: str = "LEGAL_PERSON_RAILWAY_CARRIER_ID"
+
     # === КОЛОНКИ ДАТ ===
     date_eta: str = "DATE_ETA"
     date_etd: str = "DATE_ETD"

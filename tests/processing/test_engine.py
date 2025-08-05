@@ -57,6 +57,11 @@ class DummyFirebirdManager:
         return True
 
     async def get_containers_for_processing(self, batch_size=100, target_line_ids=None):
+        self.processing_called = True
+        yield self.containers
+
+    async def get_containers_for_contractors(self, batch_size=100, target_carrier_ids=None):
+        self.contractor_called = True
         yield self.containers
 
     async def update_container_from_tracking(self, container_id, tracking_result):
@@ -192,7 +197,7 @@ async def test_skip_already_processed_container():
     assert stats.containers_processed == 0
     assert firebird.updated == []
 
-    @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_sequential_passes_switch_mappings():
     containers = [
         ContainerInfo(id=1, container_number="CONT1", line_id=1, current_dates={}),

@@ -1,7 +1,7 @@
 import sys
 import pathlib
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 
 # Ensure project root is first on sys.path so local packages resolve correctly
@@ -67,6 +67,19 @@ async def test_make_request_cache_set(client):
 
 
 @pytest.mark.asyncio
+async def test_make_request_network_error(client):
+    api, session, cache, stats = client
+    cache.get.return_value = None
+    session.get.side_effect = aiohttp.ClientError("boom")
+
+    with pytest.raises(ApiRequestError):
+        await api._make_request(session, "https://example.com/test", "key")
+
+    cache.get.assert_called_once_with("key")
+    cache.set.assert_not_called()
+    assert stats.cached_requests == 0
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status,exc", [
         (401, AuthenticationError),
@@ -81,6 +94,16 @@ async def test_handle_response_errors(client, status, exc):
     response.status = status
     response.text.return_value = "error"
     with pytest.raises(exc):
+        await api._handle_response_errors(response)
+
+
+@pytest.mark.asyncio
+async def test_handle_response_errors_404(client):
+    api, *_ = client
+    response = MagicMock()
+    response.status = 404
+    response.text = AsyncMock(return_value="not found")
+    with pytest.raises(ApiRequestError):
         await api._handle_response_errors(response)
 
 
@@ -104,6 +127,18 @@ async def test_find_order_by_container_failure(client):
 
     assert result is None
 
+
+@pytest.mark.asyncio
+async def test_find_order_by_container_no_order_cache(client):
+    api, session, cache, _ = client
+    cache.exists.return_value = True
+    api._make_request = AsyncMock()
+
+    result = await api.find_order_by_container(session, "TSTU1234567")
+
+    api._make_request.assert_not_called()
+    assert result is None
+    
 
 @pytest.mark.asyncio
 async def test_get_order_tracking_success(client):
@@ -141,4 +176,13 @@ async def test_get_container_tracking_error(client):
 
     with pytest.raises(ApiRequestError):
         await api.get_container_tracking(session, "ORD1", "CONT1")
+
+
+def test_validate_content_type_rejects_non_json(client):
+    api, *_ = client
+    response = MagicMock()
+    response.headers = {"content-type": "text/html"}
+
+    with pytest.raises(ApiRequestError):
+        api._validate_content_type(response)
 

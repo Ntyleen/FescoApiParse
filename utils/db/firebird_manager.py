@@ -169,7 +169,8 @@ class EntityTableConfig:
     container_column: str = "NAME"
     status_column: str = "SP_ENTITY_STATUS_ID"
     line_column: str = "LEGAL_PERSON_LINE_ID"
-    
+    railway_carrier_column: str = "LEGAL_PERSON_RAILWAY_CARRIER_ID"
+
     # Колонки дат
     date_eta: str = "DATE_ETA"
     date_etd: str = "DATE_ETD"
@@ -199,7 +200,8 @@ class EntityTableConfig:
         
         required_columns = [
             self.primary_key, self.container_column, 
-            self.status_column, self.line_column
+            self.status_column, self.line_column,
+            self.railway_carrier_column,
         ]
         
         for column in required_columns:
@@ -277,6 +279,7 @@ class ContainerInfo:
     status_id: Optional[int] = None
     status_name: str = ""
     line_id: Optional[int] = None
+    railway_carrier_id: Optional[int] = None
     priority: int = 0
     remaining_distance: Optional[int] = None
     # created_at: Optional[str] = None
@@ -501,6 +504,17 @@ class FirebirdOperationMatcher:
     def __init__(self, entity_config: EntityTableConfig):
         self.entity_config = entity_config
         self.logger = get_logger("firebird.matcher")
+        # By default we operate on line mappings. Can be switched to
+        # railway-specific mappings via ``set_railway_mode``.
+        self._railway_mode = False
+
+    def set_railway_mode(self, enabled: bool) -> None:
+        """Switch between line and railway mapping sets.
+
+        Args:
+            enabled: ``True`` to use railway mappings, ``False`` for line mappings
+        """
+        self._railway_mode = enabled
     
     def find_best_mapping(self, operation: str) -> Optional[EntityColumnMapping]:
         """
@@ -517,8 +531,18 @@ class FirebirdOperationMatcher:
         
         # Собираем все маппинги с оценками
         scored_mappings = []
-        
-        for column_name, mapping in self.entity_config.date_mappings.items():
+
+        mappings = self.entity_config.date_mappings
+
+        if self._railway_mode:
+            allowed = {
+                self.entity_config.date_railway_loading,
+                self.entity_config.date_railway_delivery,
+                self.entity_config.remaining_distance,
+            }
+            mappings = {k: v for k, v in mappings.items() if k in allowed}
+
+        for column_name, mapping in mappings.items():
             score = mapping.matches_operation(operation_clean)
             
             if score > 0:
@@ -748,7 +772,7 @@ class FirebirdEntityManager:
     # =========================================================================
     
     async def get_containers_for_processing(
-        self, 
+        self,
         batch_size: int = 100,
         target_line_ids: Optional[Set[int]] = None,
         min_priority: int = 0
@@ -816,6 +840,62 @@ class FirebirdEntityManager:
                 
                 self.logger.debug(f"📦 Батч {self.stats.stats['batches_processed']}: {len(batch)} контейнеров")
                 yield batch
+
+    async def get_containers_for_contractors(
+        self,
+        batch_size: int = 100,
+        carrier_ids: Optional[Set[int]] = None,
+        processed_ids: Optional[Set[int]] = None,
+    ) -> AsyncGenerator[List[ContainerInfo], None]:
+        """Получить контейнеры для указанных железнодорожных перевозчиков"""
+
+        def _load_containers():
+            try:
+                with self.connection_manager.get_connection() as connection:
+                    cursor = connection.cursor()
+
+                    query, params = self._build_contractor_selection_query(carrier_ids, processed_ids)
+
+                    self.logger.debug(f"🔥 SQL: {query}")
+                    self.logger.debug(f"🔥 Params: {params}")
+
+                    cursor.execute(query, params)
+                    rows = cursor.fetchall()
+
+                    self.logger.info(f"🔥 Загружено {len(rows)} записей из entity (contractor mode)")
+                    self.stats.record_container_loaded(len(rows))
+
+                    return rows
+
+            except Exception as e:
+                self.logger.error(f"❌ Ошибка загрузки контейнеров для перевозчиков: {e}")
+                raise
+
+        async with self._get_thread_pool() as thread_pool:
+            loop = asyncio.get_event_loop()
+            rows = await loop.run_in_executor(thread_pool, _load_containers)
+
+            if not rows:
+                self.logger.warning("📭 Нет контейнеров для обработки (contractors)")
+                return
+
+            valid_containers = []
+
+            for row in rows:
+                container_info = self._create_container_info_from_row(row)
+
+                # Последний столбец - ID перевозчика
+                if len(row) > 10:
+                    container_info.railway_carrier_id = row[10]
+
+                if self._should_process_container(container_info):
+                    valid_containers.append(container_info)
+                else:
+                    self.stats.record_container_filtered()
+
+            for i in range(0, len(valid_containers), batch_size):
+                batch = valid_containers[i:i + batch_size]
+                self.stats.record_batch_processed()
     
     def _build_selection_query(
         self, 
@@ -846,7 +926,7 @@ class FirebirdEntityManager:
         
         params = []
         
-        # Исключаем статусы (Firebird использует ? вместо %s)
+        # Исключаем статусы
         if self.entity_config.excluded_status_ids:
             status_placeholders = ','.join(['?'] * len(self.entity_config.excluded_status_ids))
             query += f" AND {self.entity_config.status_column} NOT IN ({status_placeholders})"
@@ -868,6 +948,54 @@ class FirebirdEntityManager:
         
         return query, params
     
+    def _build_contractor_selection_query(
+        self,
+        carrier_ids: Optional[Set[int]],
+        processed_ids: Optional[Set[int]] = None,
+    ) -> Tuple[str, List[Any]]:
+        """Построить SQL запрос для выборки по перевозчикам"""
+
+        base_columns = [
+            self.entity_config.primary_key,
+            self.entity_config.container_column,
+            self.entity_config.status_column,
+            self.entity_config.line_column,
+            self.entity_config.date_eta,
+            self.entity_config.date_etd,
+            self.entity_config.date_in,
+            self.entity_config.date_railway_loading,
+            self.entity_config.date_railway_delivery,
+            self.entity_config.remaining_distance,
+            self.entity_config.railway_carrier_column,
+        ]
+
+        query = f"""
+        SELECT {', '.join(base_columns)}
+        FROM {self.entity_config.table_name}
+        WHERE 1=1
+        """
+
+        params: List[Any] = []
+
+        if self.entity_config.excluded_status_ids:
+            status_placeholders = ','.join(['?'] * len(self.entity_config.excluded_status_ids))
+            query += f" AND {self.entity_config.status_column} NOT IN ({status_placeholders})"
+            params.extend(sorted(int(s) for s in self.entity_config.excluded_status_ids))
+
+        if carrier_ids:
+            carrier_placeholders = ','.join(['?'] * len(carrier_ids))
+            query += f" AND {self.entity_config.railway_carrier_column} IN ({carrier_placeholders})"
+            params.extend(sorted(carrier_ids))
+
+        if processed_ids:
+            id_placeholders = ','.join(['?'] * len(processed_ids))
+            query += f" AND {self.entity_config.primary_key} NOT IN ({id_placeholders})"
+            params.extend(sorted(processed_ids))
+
+        query += f" ORDER BY {self.entity_config.primary_key}"
+
+        return query, params
+
     def _create_container_info_from_row(self, row) -> ContainerInfo:
         """Создать ContainerInfo из строки результата"""
         

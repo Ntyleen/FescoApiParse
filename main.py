@@ -130,8 +130,17 @@ class FescoTracker:
                 batch_size=batch_size,
                 target_line_ids=set(self.config.database.target_line_ids) # type: ignore
             )
-            
+
             self._print_engine_stats(stats)
+
+            contractor_ids = set(getattr(self.config.database, "target_railway_carrier_ids", []))
+            if contractor_ids:
+                self.logger.info("🚂 Запуск обработки ЖД подрядчиков") # type: ignore
+                stats = await engine.run_full_workflow(
+                    batch_size=batch_size,
+                    target_railway_carrier_ids=contractor_ids,
+                )
+                self._print_engine_stats(stats)
             
         except ImportError:
             self.logger.warning("⚠️ ContainerTrackingEngine недоступен, используем legacy режим")

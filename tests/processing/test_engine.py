@@ -2,7 +2,7 @@ import asyncio
 import types
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -46,7 +46,12 @@ class DummyFirebirdManager:
         self.entity_config = MagicMock(date_railway_loading="DATE_RAILWAY_LOADING")
         mapping = MagicMock()
         mapping.entity_column = "DATE_ETA"
-        self.operation_matcher = MagicMock(find_best_mapping=MagicMock(return_value=mapping))
+        self.operation_matcher = MagicMock(
+            find_best_mapping=MagicMock(return_value=mapping),
+            set_railway_mode=MagicMock(),
+        )
+        self.processing_called = False
+        self.contractor_called = False
 
     async def test_connection(self):
         return True
@@ -161,3 +166,57 @@ async def test_skip_container_with_no_order():
     assert stats.containers_loaded == 1
     assert stats.orders_processed == 0
     assert await engine.binding_manager.is_container_no_order("CONT1") is True
+
+
+@pytest.mark.asyncio
+async def test_skip_already_processed_container():
+    containers = [
+        ContainerInfo(id=1, container_number="CONT1", line_id=1, current_dates={}),
+    ]
+    firebird = DummyFirebirdManager(containers)
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    await engine.binding_manager.mark_container_processed("CONT1")
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    engine._process_single_container = AsyncMock()
+
+    stats = await engine.run_full_workflow(batch_size=10)
+
+    assert engine._process_single_container.call_count == 0
+    assert stats.containers_processed == 0
+    assert firebird.updated == []
+
+    @pytest.mark.asyncio
+async def test_sequential_passes_switch_mappings():
+    containers = [
+        ContainerInfo(id=1, container_number="CONT1", line_id=1, current_dates={}),
+    ]
+    firebird = DummyFirebirdManager(containers)
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(date="2024-01-01", operation="Load", location="Test")
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10, target_line_ids={1})
+    await engine.run_full_workflow(batch_size=10, target_railway_carrier_ids={2})
+
+    assert firebird.processing_called
+    assert firebird.contractor_called
+    firebird.operation_matcher.set_railway_mode.assert_has_calls([call(False), call(True)])

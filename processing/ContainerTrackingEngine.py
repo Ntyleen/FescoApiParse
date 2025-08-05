@@ -76,7 +76,8 @@ class ContainerTrackingEngine:
     async def run_full_workflow(
         self,
         batch_size: int = 100,
-        target_line_ids: Optional[Set[int]] = None
+        target_line_ids: Optional[Set[int]] = None,
+        target_railway_carrier_ids: Optional[Set[int]] = None,
     ) -> EngineStats:
         """
         Запуск полного workflow обработки
@@ -84,12 +85,21 @@ class ContainerTrackingEngine:
         Args:
             batch_size: Размер батча для обработки контейнеров
             target_line_ids: ID линий для фильтрации (None = все линии)
+            target_railway_carrier_ids: ID ЖД подрядчиков для фильтрации
             
         Returns:
             Статистика выполнения
         """
-        if target_line_ids is None:
-            target_line_ids = set(self.config.database.target_line_ids)
+        if target_railway_carrier_ids is not None:
+            use_railway = True
+            if not target_railway_carrier_ids:
+                target_railway_carrier_ids = set(self.config.database.target_railway_carrier_ids)
+        else:
+            use_railway = False
+            if target_line_ids is None:
+                target_line_ids = set(self.config.database.target_line_ids)
+
+        self.session_processed_orders = set()
 
         self.logger.info("🚀 Запуск полного workflow трекинга")
         self.logger.info("="*60)
@@ -107,12 +117,19 @@ class ContainerTrackingEngine:
         try:
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                 
-                # ИЗМЕНЕНО: Читаем контейнеры напрямую из Firebird
-                async for batch in self.firebird_manager.get_containers_for_processing(
-                    batch_size=batch_size,
-                    target_line_ids=target_line_ids
-                ):
-                    await self._process_container_batch(session, batch)
+                if use_railway:
+                    container_source = self.firebird_manager.get_containers_for_contractors(
+                        batch_size=batch_size,
+                        target_carrier_ids=target_railway_carrier_ids,
+                    )
+                else:
+                    container_source = self.firebird_manager.get_containers_for_processing(
+                        batch_size=batch_size,
+                        target_line_ids=target_line_ids,
+                    )
+
+                async for batch in container_source:
+                    await self._process_container_batch(session, batch, use_railway_mappings=use_railway)
                     self.engine_stats.firebird_read_batches += 1
                 
                 # Финальная статистика
@@ -128,14 +145,20 @@ class ContainerTrackingEngine:
         return self.engine_stats
     
     async def _process_container_batch(
-        self, 
-        session: aiohttp.ClientSession, 
-        containers: List[ContainerInfo]  # ИЗМЕНЕНО: Теперь ContainerInfo из Firebird
+        self,
+        session: aiohttp.ClientSession,
+        containers: List[ContainerInfo],  # ИЗМЕНЕНО: Теперь ContainerInfo из Firebird
+        use_railway_mappings: bool = False,
     ) -> None:
         """
         Обработка батча контейнеров
         """
         
+        # переключаем набор маппингов в зависимости от режима
+        if hasattr(self.firebird_manager, "operation_matcher"):
+            # type: ignore[attr-defined]
+            self.firebird_manager.operation_matcher.set_railway_mode(use_railway_mappings)
+
         self.engine_stats.containers_loaded += len(containers)
         self.logger.info(f"📦 Обработка батча: {len(containers)} контейнеров")
         
@@ -214,8 +237,26 @@ class ContainerTrackingEngine:
         Обработка группы контейнеров одной заявки
         """
         
-        container_numbers = [c.container_number.strip() for c in containers]
-        self.logger.info(f"📡 Обработка заявки {order_id}: {len(containers)} контейнеров")
+        # Пропускаем контейнеры, уже обработанные ранее
+        filtered_containers: List[ContainerInfo] = []
+        for c in containers:
+            if await self.binding_manager.is_container_processed(c.container_number):
+                self.logger.debug(
+                    f"⏭️ Контейнер {c.container_number} уже обработан, пропускаем"
+                )
+                continue
+            filtered_containers.append(c)
+
+        if not filtered_containers:
+            self.logger.debug(
+                f"⏭️ Заявка {order_id} содержит только обработанные контейнеры"
+            )
+            return
+
+        container_numbers = [c.container_number.strip() for c in filtered_containers]
+        self.logger.info(
+            f"📡 Обработка заявки {order_id}: {len(filtered_containers)} контейнеров"
+        )
         
         try:
             # Получаем данные заявки одним запросом для всех контейнеров
@@ -241,7 +282,7 @@ class ContainerTrackingEngine:
             
             # Создаем задачи для параллельной обработки контейнеров
             container_tasks = []
-            for container in containers:
+            for container in filtered_containers:
                 task = self._process_single_container(
                     session, container, order_id, order_data  # Передаем ContainerInfo
                 )
@@ -264,31 +305,42 @@ class ContainerTrackingEngine:
             for i, result in enumerate(results):
                 # Увеличиваем счетчик обработанных в любом случае
                 self.engine_stats.containers_processed += 1
-                
+
                 if isinstance(result, Exception):
                     # Это исключение - логируем и пропускаем
-                    self.logger.error(f"❌ Ошибка обработки {containers[i].container_number}: {result}")
+                    self.logger.error(
+                        f"❌ Ошибка обработки {filtered_containers[i].container_number}: {result}"
+                    )
                     continue
-                
+
                 # Явная проверка типа для IDE
                 if not isinstance(result, TrackingResult):
-                    self.logger.error(f"❌ Неожиданный тип результата для {containers[i].container_number}: {type(result)}")
+                    self.logger.error(
+                        f"❌ Неожиданный тип результата для {filtered_containers[i].container_number}: {type(result)}"
+                    )
                     continue
-                
+
                 # Теперь IDE точно знает, что result это TrackingResult
                 tracking_result: TrackingResult = result  # Explicit cast для IDE
                 if tracking_result.success:
-                    successful_results.append((containers[i], tracking_result))
+                    successful_results.append((filtered_containers[i], tracking_result))
                     self.engine_stats.containers_successful += 1
                 else:
                     # Результат получен, но не успешный
                     error_msg = tracking_result.error_message or "Неизвестная ошибка"
-                    self.logger.debug(f"⚠️ Неуспешная обработка {containers[i].container_number}: {error_msg}")
+                    self.logger.debug(
+                        f"⚠️ Неуспешная обработка {filtered_containers[i].container_number}: {error_msg}"
+                    )
             
             # ИЗМЕНЕНО: Записываем результаты напрямую в Firebird
             if successful_results:
                 await self._write_results_to_firebird(successful_results)
-            
+                # Отмечаем успешно обработанные контейнеры
+                for container_info, _ in successful_results:
+                    await self.binding_manager.mark_container_processed(
+                        container_info.container_number
+                    )
+
             enriched_summary = self._enrich_summary_with_results(
                 current_order_summary, successful_results
             )

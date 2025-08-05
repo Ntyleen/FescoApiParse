@@ -95,10 +95,11 @@ class FirebirdDatabaseConfig:
     date_railway_loading: str = "DATE_RAILWAY_LOADING"
     date_railway_delivery: str = "DATE_RAILWAY_DELIVERY"
     remaining_distance: str = "TRACING_DAYS"
-    
+
     # === НАСТРОЙКИ ОБРАБОТКИ ===
     excluded_status_ids: List[int] = field(default_factory=lambda: [8, 9, 24])  # закрыто, доставлено, отменено
     target_line_ids: List[int] = field(default_factory=lambda: [451, 751])  # Если пусто - все линии
+    target_railway_carrier_ids: List[int] = field(default_factory=list)
     batch_size: int = 100
     max_connections: int = 10
     
@@ -116,6 +117,13 @@ class FirebirdDatabaseConfig:
         else:
             # Одинарное значение (int/str и др.)
             self.target_line_ids = [int(self.target_line_ids)]
+
+        if isinstance(self.target_railway_carrier_ids, list):
+            self.target_railway_carrier_ids = [int(x) for x in self.target_railway_carrier_ids]
+        elif self.target_railway_carrier_ids is None:
+            self.target_railway_carrier_ids = []
+        else:
+            self.target_railway_carrier_ids = [int(self.target_railway_carrier_ids)]
 
         """Валидация Firebird конфигурации"""
         if not self.host:

@@ -30,6 +30,7 @@ class ContainerBindingManager:
         self.ORDER_KEY_PREFIX = "order_to_containers:"
         self.PROCESSED_ORDERS_KEY = "processed_orders"
         self.NO_ORDER_PREFIX = "no_order:"
+        self.PROCESSED_CONTAINER_PREFIX = "processed_container:"
         
         self.logger.debug("🔗 ContainerBindingManager инициализирован")
     
@@ -205,6 +206,32 @@ class ContainerBindingManager:
         except Exception as e:
             self.logger.error(
                 f"❌ Ошибка проверки отметки контейнера {container_number}: {e}"
+            )
+            return False
+
+    async def mark_container_processed(self, container_number: str) -> bool:
+        """Отметить контейнер как полностью обработанный"""
+        try:
+            key = f"{self.PROCESSED_CONTAINER_PREFIX}{container_number}"
+            await self.cache.set(key, {"processed": True}, ttl_seconds=86400)
+            self.logger.debug(
+                f"✅ Контейнер {container_number} отмечен как обработанный"
+            )
+            return True
+        except Exception as e:
+            self.logger.error(
+                f"❌ Ошибка отметки контейнера {container_number} как обработанного: {e}"
+            )
+            return False
+
+    async def is_container_processed(self, container_number: str) -> bool:
+        """Проверить, обработан ли контейнер ранее"""
+        try:
+            key = f"{self.PROCESSED_CONTAINER_PREFIX}{container_number}"
+            return await self.cache.exists(key)
+        except Exception as e:
+            self.logger.error(
+                f"❌ Ошибка проверки обработки контейнера {container_number}: {e}"
             )
             return False
     

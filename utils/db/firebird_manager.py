@@ -844,17 +844,26 @@ class FirebirdEntityManager:
     async def get_containers_for_contractors(
         self,
         batch_size: int = 100,
-        carrier_ids: Optional[Set[int]] = None,
+        target_carrier_ids: Optional[Set[int]] = None,
         processed_ids: Optional[Set[int]] = None,
     ) -> AsyncGenerator[List[ContainerInfo], None]:
-        """Получить контейнеры для указанных железнодорожных перевозчиков"""
+        """Получить контейнеры для указанных железнодорожных перевозчиков
+
+        Args:
+            batch_size: Размер батча для обработки
+            target_carrier_ids: ID перевозчиков для фильтрации (None = все)
+            processed_ids: ID уже обработанных контейнеров для исключения
+
+        Yields:
+            Списки ``ContainerInfo`` объектов
+        """
 
         def _load_containers():
             try:
                 with self.connection_manager.get_connection() as connection:
                     cursor = connection.cursor()
 
-                    query, params = self._build_contractor_selection_query(carrier_ids, processed_ids)
+                    query, params = self._build_contractor_selection_query(target_carrier_ids, processed_ids)
 
                     self.logger.debug(f"🔥 SQL: {query}")
                     self.logger.debug(f"🔥 Params: {params}")
@@ -893,9 +902,17 @@ class FirebirdEntityManager:
                 else:
                     self.stats.record_container_filtered()
 
+            self.logger.info(
+                f"✅ К обработке: {len(valid_containers)} из {len(rows)} контейнеров (contractors)"
+            )
+
             for i in range(0, len(valid_containers), batch_size):
                 batch = valid_containers[i:i + batch_size]
                 self.stats.record_batch_processed()
+                self.logger.debug(
+                    f"📦 Батч {self.stats.stats['batches_processed']}: {len(batch)} контейнеров (contractors)"
+                )
+                yield batch
     
     def _build_selection_query(
         self, 

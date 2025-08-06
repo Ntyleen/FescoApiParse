@@ -21,3 +21,4 @@ __pycache__*
 .gitignore
 fesco_launcher.ps1
 tree.txt
+test_log.log

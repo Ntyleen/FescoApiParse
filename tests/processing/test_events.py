@@ -123,8 +123,17 @@ def test_get_best_event_with_malformed_dates(processor):
         ContainerEvent(date="2024-05-10 15:30:00", operation="new"),
         ContainerEvent(date=None, operation="missing"),
     ]
-    best = processor._get_best_event(events)
+    best = processor._get_best_event(events, prefer_earliest=False)
     assert best.operation == "new"
+
+
+def test_get_best_event_prefers_earliest_when_flag(processor):
+    events = [
+        ContainerEvent(date="2024-01-02 12:00:00", operation="late"),
+        ContainerEvent(date="2024-01-01 09:00:00", operation="early"),
+    ]
+    best = processor._get_best_event(events, prefer_earliest=True)
+    assert best.operation == "early"
 
 
 def test_choose_better_event_more_fields(processor):

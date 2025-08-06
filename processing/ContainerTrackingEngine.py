@@ -168,7 +168,7 @@ class ContainerTrackingEngine:
         # Обрабатываем каждую группу заявки
         for order_id, container_group in order_groups.items():
             if order_id:  # Пропускаем контейнеры без заявок
-                await self._process_order_group(session, order_id, container_group)
+                await self._process_order_group(session, order_id, container_group, use_railway_mappings)
     
     async def _group_containers_by_orders(
         self, 
@@ -231,7 +231,8 @@ class ContainerTrackingEngine:
         self,
         session: aiohttp.ClientSession,
         order_id: str,
-        containers: List[ContainerInfo]  # ИЗМЕНЕНО: ContainerInfo
+        containers: List[ContainerInfo],  # ИЗМЕНЕНО: ContainerInfo
+        use_railway_mappings: bool = False
     ) -> None:
         """
         Обработка группы контейнеров одной заявки
@@ -284,7 +285,7 @@ class ContainerTrackingEngine:
             container_tasks = []
             for container in filtered_containers:
                 task = self._process_single_container(
-                    session, container, order_id, order_data  # Передаем ContainerInfo
+                    session, container, order_id, order_data, prefer_earliest=use_railway_mappings  # Передаем ContainerInfo
                 )
                 container_tasks.append(task)
             
@@ -362,7 +363,8 @@ class ContainerTrackingEngine:
         session: aiohttp.ClientSession,
         container: ContainerInfo,
         order_id: str,
-        order_data: dict
+        order_data: dict,
+        prefer_earliest: bool = False
     ) -> TrackingResult:
         """
         Детальная обработка одного контейнера
@@ -387,7 +389,7 @@ class ContainerTrackingEngine:
             container_events = self.event_processor.extract_container_events(container_data)
             
             final_event, has_duplicates, source = self.event_processor.merge_and_deduplicate(
-                order_events, container_events
+                order_events, container_events, prefer_earliest=prefer_earliest
             )
             
             result.last_event = final_event

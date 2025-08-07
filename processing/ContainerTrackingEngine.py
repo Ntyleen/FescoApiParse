@@ -271,8 +271,9 @@ class ContainerTrackingEngine:
             for container in containers:
                 if await self.binding_manager.is_container_processed(container.container_number):
                     self.logger.debug(
-                        f"♻️ Контейнер {container.container_number} уже был обработан, перепроверяем"
+                        f"♻️ Контейнер {container.container_number} уже был обработан, пропускаем"
                     )
+                    continue
                     continue
                 task = self._process_single_container(
                     session, container, order_id, order_data, prefer_earliest=use_railway_mappings  # Передаем ContainerInfo
@@ -438,6 +439,31 @@ class ContainerTrackingEngine:
                         stored_value = container_info.current_dates.get(entity_column)
                         if not new_value:
                             continue
+                if (
+                    new_remaining is not None
+                    and container_info.remaining_distance is not None
+                    and new_remaining == container_info.remaining_distance
+                ):
+                    db_remaining = await self.firebird_manager.get_remaining_distance(container_info.id)
+                    if db_remaining == container_info.remaining_distance:
+                        self.logger.debug(
+                            f"⏭️ {container_info.container_number}: remaining distance unchanged"
+                        )
+                        continue
+
+                if mapping and mapping.entity_column in container_info.current_dates:
+                    new_value = (
+                        tracking_result.last_event.date if tracking_result.last_event else None
+                    )
+                    stored_value = container_info.current_dates.get(mapping.entity_column)
+
+                    if new_value is None:
+                        self.logger.debug(
+                            f"⏭️ {container_info.container_number}: empty value for {mapping.entity_column}"
+                        )
+                        continue
+
+                    if stored_value:
                         parsed_new = self.firebird_manager.transformer.transform_value(
                             new_value, mapping.column_datatype
                         )

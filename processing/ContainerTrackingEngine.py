@@ -237,26 +237,10 @@ class ContainerTrackingEngine:
         """
         Обработка группы контейнеров одной заявки
         """
-        
-        # Пропускаем контейнеры, уже обработанные ранее
-        filtered_containers: List[ContainerInfo] = []
-        for c in containers:
-            if await self.binding_manager.is_container_processed(c.container_number):
-                self.logger.debug(
-                    f"⏭️ Контейнер {c.container_number} уже обработан, пропускаем"
-                )
-                continue
-            filtered_containers.append(c)
 
-        if not filtered_containers:
-            self.logger.debug(
-                f"⏭️ Заявка {order_id} содержит только обработанные контейнеры"
-            )
-            return
-
-        container_numbers = [c.container_number.strip() for c in filtered_containers]
+        container_numbers = [c.container_number.strip() for c in containers]
         self.logger.info(
-            f"📡 Обработка заявки {order_id}: {len(filtered_containers)} контейнеров"
+            f"📡 Обработка заявки {order_id}: {len(containers)} контейнеров"
         )
         
         try:
@@ -275,6 +259,7 @@ class ContainerTrackingEngine:
                 self.engine_stats.api_calls_saved += len(containers)
                 
                 # Отмечаем заявку как обработанную в сессии
+                await self.binding_manager.mark_order_processed(order_id)
                 self.session_processed_orders.add(order_id)
                 return
             
@@ -283,7 +268,11 @@ class ContainerTrackingEngine:
             
             # Создаем задачи для параллельной обработки контейнеров
             container_tasks = []
-            for container in filtered_containers:
+            for container in containers:
+                if await self.binding_manager.is_container_processed(container.container_number):
+                    self.logger.debug(
+                        f"♻️ Контейнер {container.container_number} уже был обработан, перепроверяем"
+                    )
                 task = self._process_single_container(
                     session, container, order_id, order_data, prefer_earliest=use_railway_mappings  # Передаем ContainerInfo
                 )
@@ -310,27 +299,27 @@ class ContainerTrackingEngine:
                 if isinstance(result, Exception):
                     # Это исключение - логируем и пропускаем
                     self.logger.error(
-                        f"❌ Ошибка обработки {filtered_containers[i].container_number}: {result}"
+                        f"❌ Ошибка обработки {containers[i].container_number}: {result}"
                     )
                     continue
 
                 # Явная проверка типа для IDE
                 if not isinstance(result, TrackingResult):
                     self.logger.error(
-                        f"❌ Неожиданный тип результата для {filtered_containers[i].container_number}: {type(result)}"
+                        f"❌ Неожиданный тип результата для {containers[i].container_number}: {type(result)}"
                     )
                     continue
 
                 # Теперь IDE точно знает, что result это TrackingResult
                 tracking_result: TrackingResult = result  # Explicit cast для IDE
                 if tracking_result.success:
-                    successful_results.append((filtered_containers[i], tracking_result))
+                    successful_results.append((containers[i], tracking_result))
                     self.engine_stats.containers_successful += 1
                 else:
                     # Результат получен, но не успешный
                     error_msg = tracking_result.error_message or "Неизвестная ошибка"
                     self.logger.debug(
-                        f"⚠️ Неуспешная обработка {filtered_containers[i].container_number}: {error_msg}"
+                        f"⚠️ Неуспешная обработка {containers[i].container_number}: {error_msg}"
                     )
             
             # ИЗМЕНЕНО: Записываем результаты напрямую в Firebird

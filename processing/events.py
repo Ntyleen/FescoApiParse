@@ -134,90 +134,75 @@ class EventProcessor:
         return events
     
     def merge_and_deduplicate(
-        self, 
-        order_events: List[ContainerEvent], 
+        self,
+        order_events: List[ContainerEvent],
         container_events: List[ContainerEvent],
-        prefer_earliest: bool = False
-    ) -> Tuple[ContainerEvent | None, bool, str]:
+        prefer_earliest: bool = False,
+    ) -> Tuple[List[ContainerEvent], bool, str]:
+        """Объединение и дедупликация событий из разных источников.
+
+        Возвращает список уникальных событий, отсортированный по дате от
+        самых ранних к самым поздним.
         """
-        Объединение и дедупликация событий из разных источников
-        
-        Args:
-            order_events: События из данных заявки
-            container_events: События из детализированных данных контейнера
-        
-        Returns:
-            Tuple[итоговое_событие, есть_дубликаты, источник_данных]
-        """
-        
-        self.logger.debug(f"🔀 Дедупликация: order={len(order_events)}, container={len(container_events)}")
-        
-        # Случай 1: Нет событий вообще
+
+        self.logger.debug(
+            f"🔀 Дедупликация: order={len(order_events)}, container={len(container_events)}"
+        )
+
         if not order_events and not container_events:
             self.logger.debug("📭 Нет событий для обработки")
-            return None, False, "no_events"
-        
-        # Случай 2: Только события заявки
-        if order_events and not container_events:
-            self.logger.debug("📦 Только order events доступны")
-            best_event = self._get_best_event(order_events, prefer_earliest)
-            self.logger.info(f"✅ Выбрано order event: {best_event.operation}")
-            return best_event, False, "order"
-        
-        # Случай 3: Только события контейнера
-        if container_events and not order_events:
-            self.logger.debug("🔍 Только container events доступны")
-            best_event = self._get_best_event(container_events, prefer_earliest)
-            self.logger.info(f"✅ Выбрано container event: {best_event.operation}")
-            return best_event, False, "container"
-        
-        # Случай 4: События из обоих источников - нужна дедупликация
-        self.logger.debug("🔀 Объединение событий из двух источников")
-        return self._merge_events(order_events, container_events, prefer_earliest)
-    
-    def _merge_events(
-        self, 
-        order_events: List[ContainerEvent], 
-        container_events: List[ContainerEvent],
-        prefer_earliest: bool = False
-    ) -> Tuple[ContainerEvent, bool, str]:
-        """
-        Объединение событий из двух источников с дедупликацией
+            return [], False, "no_events"
 
-        Args:
-            order_events: События из заявки
-            container_events: События из контейнера
-        
-        Returns:
-            Tuple[итоговое_событие, есть_дубликаты, источник]
-        """
-        
-        order_event = self._get_best_event(order_events, prefer_earliest)
-        container_event = self._get_best_event(container_events, prefer_earliest)
-        
-        self.logger.debug(f"📦 Order event: {order_event.operation} в {order_event.location}")
-        self.logger.debug(f"🔍 Container event: {container_event.operation} в {container_event.location}")
-        
-        # Проверяем на дубликаты
-        if order_event.matches(container_event):
-            self.logger.debug("🔄 Найдены дубликаты событий")
-            
-            # Выбираем более подробное событие
-            chosen_event = self._choose_better_event(order_event, container_event)
-            
-            # Логируем выбор
-            if chosen_event == container_event:
-                self.logger.info("✅ Выбрано container event (более детальное)")
+        # Определяем источник
+        if order_events and container_events:
+            source = "merged"
+        elif order_events:
+            source = "order"
+        else:
+            source = "container"
+
+        events = order_events + container_events
+        deduped: List[ContainerEvent] = []
+        has_duplicates = False
+
+        for event in events:
+            duplicate = next((e for e in deduped if e.matches(event)), None)
+            if duplicate:
+                has_duplicates = True
+                better = self._choose_better_event(duplicate, event)
+                deduped[deduped.index(duplicate)] = better
             else:
-                self.logger.info("✅ Выбрано order event")
-            
-            self.logger.info(f"🔄 Дедупликация: {chosen_event.operation} в {chosen_event.location}")
-            return chosen_event, True, "merged"
-        
-        # События разные - берем из контейнера (обычно более актуальные)
-        self.logger.debug("🔍 События не совпадают, выбираем container event")
-        self.logger.info(f"✅ Выбрано container event: {container_event.operation}")
-        return container_event, False, "container"
+                deduped.append(event)
+
+        deduped = self._sort_events(deduped, prefer_earliest)
+
+        self.logger.debug(
+            f"📚 После объединения: {len(deduped)} событий, дубликаты={has_duplicates}"
+        )
+
+        return deduped, has_duplicates, source
+
+    def _sort_events(
+        self, events: List[ContainerEvent], prefer_earliest: bool
+    ) -> List[ContainerEvent]:
+        """Сортировка событий по дате.
+
+        События без валидной даты помещаются в конец списка.
+        """
+
+        def date_key(event: ContainerEvent) -> tuple:
+            if not event.date:
+                return (1, datetime.max)
+            parsed_date = self.date_transformer.transform_value(event.date, "TIMESTAMP")
+            if parsed_date is None:
+                try:
+                    parsed_date = datetime.strptime(event.date, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    return (1, datetime.max)
+            return (0, parsed_date)
+
+        sorted_events = sorted(events, key=date_key)
+        return sorted_events
     
     def _get_best_event(self, events: List[ContainerEvent], prefer_earliest) -> ContainerEvent:
         """

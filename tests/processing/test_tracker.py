@@ -63,7 +63,7 @@ async def test_track_single_container_success(tracker_with_mocks):
     event = ContainerEvent(date="2024-01-01", location="VVO", operation="ARRIVED")
     event_proc.extract_order_events.return_value = [event]
     event_proc.extract_container_events.return_value = []
-    event_proc.merge_and_deduplicate.return_value = (event, False, "order")
+    event_proc.merge_and_deduplicate.return_value = ([event], False, "order")
 
     result = await tracker.track_single_container(session, "CONT1")
 
@@ -102,7 +102,9 @@ async def test_track_containers_with_mocked_tasks(monkeypatch):
     async def fake_track(self, session, number):
         await asyncio.sleep(0)
         result = TrackingResult(container_number=number)
-        result.last_event = ContainerEvent(date="2024-01-01")
+        ev = ContainerEvent(date="2024-01-01")
+        result.events = [ev]
+        result.last_event = ev
         self.stats.successful_tracks += 1
         return result
 

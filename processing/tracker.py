@@ -123,12 +123,13 @@ class ContainerTracker:
             # Шаг 4: Объединение и дедупликация событий
             container_logger.debug("🔄 Шаг 4: Объединение и дедупликация")
             
-            final_event, has_duplicates, source = self.event_processor.merge_and_deduplicate(
+            events, has_duplicates, source = self.event_processor.merge_and_deduplicate(
                 order_events, container_events
             )
-            
+
             # Заполнение результата
-            result.last_event = final_event
+            result.events = events
+            result.last_event = events[-1] if events else None
             result.has_duplicates = has_duplicates
             result.events_source = source
             
@@ -141,7 +142,7 @@ class ContainerTracker:
                 self.stats.successful_tracks += 1
                 container_logger.info(
                     f"✅ Трекинг успешен | Источник: {source} | "
-                    f"Операция: {final_event.operation if final_event else 'N/A'}"
+                    f"Операция: {result.last_event.operation if result.last_event else 'N/A'}"
                 )
             else:
                 self.stats.failed_tracks += 1

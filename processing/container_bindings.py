@@ -183,6 +183,30 @@ class ContainerBindingManager:
             self.logger.error(f"❌ Ошибка отметки заявки {order_id}: {e}")
             return False
 
+    async def unmark_order_processed(self, order_id: str) -> bool:
+        """Сбросить отметку об обработке заявки"""
+
+        try:
+            processed_orders = await self.cache.get(self.PROCESSED_ORDERS_KEY) or {"orders": []}
+
+            order_set = set(processed_orders.get("orders", []))
+            if order_id in order_set:
+                order_set.remove(order_id)
+                updated_data = {"orders": list(order_set)}
+                await self.cache.set(
+                    self.PROCESSED_ORDERS_KEY, updated_data, ttl_seconds=86400
+                )
+                self.logger.debug(
+                    f"🔄 Заявка {order_id} помечена как требующая повторной обработки"
+                )
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                f"❌ Ошибка сброса обработки заявки {order_id}: {e}"
+            )
+            return False
+
     async def mark_container_no_order(self, container_number: str) -> bool:
         """Отметить контейнер как не имеющий заявки"""
         try:

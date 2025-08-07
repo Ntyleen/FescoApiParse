@@ -271,8 +271,9 @@ class ContainerTrackingEngine:
             for container in containers:
                 if await self.binding_manager.is_container_processed(container.container_number):
                     self.logger.debug(
-                        f"♻️ Контейнер {container.container_number} уже был обработан, перепроверяем"
+                        f"♻️ Контейнер {container.container_number} уже был обработан, пропускаем"
                     )
+                    continue
                 task = self._process_single_container(
                     session, container, order_id, order_data, prefer_earliest=use_railway_mappings  # Передаем ContainerInfo
                 )
@@ -422,10 +423,12 @@ class ContainerTrackingEngine:
                     and container_info.remaining_distance is not None
                     and new_remaining == container_info.remaining_distance
                 ):
-                    self.logger.debug(
-                        f"⏭️ {container_info.container_number}: remaining distance unchanged"
-                    )
-                    continue
+                    db_remaining = await self.firebird_manager.get_remaining_distance(container_info.id)
+                    if db_remaining == container_info.remaining_distance:
+                        self.logger.debug(
+                            f"⏭️ {container_info.container_number}: remaining distance unchanged"
+                        )
+                        continue
 
                 if mapping and mapping.entity_column in container_info.current_dates:
                     new_value = (

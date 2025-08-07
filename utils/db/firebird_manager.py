@@ -1129,6 +1129,34 @@ class FirebirdEntityManager:
             self.logger.error(f"❌ Ошибка async обновления контейнера {container_id}: {e}")
             self.stats.record_update_failure()
             return False
+
+    async def get_remaining_distance(self, container_id: int) -> Optional[int]:
+        """Получить актуальное значение remaining_distance из базы"""
+
+        def _fetch_sync() -> Optional[int]:
+            try:
+                with self.connection_manager.get_connection() as connection:
+                    cursor = connection.cursor()
+                    query = (
+                        f"SELECT {self.entity_config.remaining_distance} "
+                        f"FROM {self.entity_config.table_name} "
+                        f"WHERE {self.entity_config.primary_key} = ?"
+                    )
+                    cursor.execute(query, (container_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        value = row[0]
+                        return int(value) if value is not None else None
+                    return None
+            except Exception as e:
+                self.logger.error(
+                    f"❌ Ошибка получения remaining_distance для {container_id}: {e}"
+                )
+                return None
+
+        async with self._get_thread_pool() as thread_pool:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(thread_pool, _fetch_sync)
     
     def _prepare_update_data(
         self, 

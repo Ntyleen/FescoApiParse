@@ -40,8 +40,9 @@ class DummyCache(CacheBackend):
 
 
 class DummyFirebirdManager:
-    def __init__(self, containers):
+    def __init__(self, containers, db_remaining=None):
         self.containers = containers
+        self.db_remaining = db_remaining or {c.id: c.remaining_distance for c in containers}
         self.updated = []
         self.entity_config = MagicMock(date_railway_loading="DATE_RAILWAY_LOADING")
         mapping = MagicMock()
@@ -50,6 +51,7 @@ class DummyFirebirdManager:
             find_best_mapping=MagicMock(return_value=mapping),
             set_railway_mode=MagicMock(),
         )
+        self.transformer = MagicMock(transform_value=lambda v, dt: int(v) if v is not None else None)
         self.processing_called = False
         self.contractor_called = False
 
@@ -67,6 +69,9 @@ class DummyFirebirdManager:
     async def update_container_from_tracking(self, container_id, tracking_result):
         self.updated.append(container_id)
         return True
+
+    async def get_remaining_distance(self, container_id):
+        return self.db_remaining.get(container_id)
 
     async def get_entity_statistics(self):
         return {"runtime_stats": {"records_updated": len(self.updated)}}
@@ -153,6 +158,37 @@ async def test_skip_update_if_existing_date_is_earlier():
     await engine.run_full_workflow(batch_size=10)
 
     assert firebird.updated == []
+
+
+@pytest.mark.asyncio
+async def test_update_if_remaining_distance_differs_from_db():
+    container = ContainerInfo(
+        id=1,
+        container_number="CONT1",
+        line_id=1,
+        current_dates={},
+        remaining_distance=5,
+    )
+    firebird = DummyFirebirdManager([container], db_remaining={1: 4})
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container_info, order_id, order_data, prefer_earliest=False):
+        res = TrackingResult(container_number=container_info.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(date="2024-01-01", operation="Load", remainingDistance="5")
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert firebird.updated == [1]
 
 @pytest.mark.asyncio
 async def test_skip_container_with_no_order():

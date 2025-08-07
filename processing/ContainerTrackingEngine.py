@@ -238,92 +238,108 @@ class ContainerTrackingEngine:
         Обработка группы контейнеров одной заявки
         """
 
-        container_numbers = [c.container_number.strip() for c in containers]
+        # Сначала отфильтруем контейнеры, которые уже были обработаны
+        filtered_containers: List[ContainerInfo] = []
+        for c in containers:
+            if await self.binding_manager.is_container_processed(c.container_number):
+                self.logger.debug(
+                    f"♻️ Контейнер {c.container_number} уже был обработан, пропускаем"
+                )
+                continue
+            filtered_containers.append(c)
+
+        if not filtered_containers:
+            self.logger.debug(
+                f"⏭️ Заявка {order_id} содержит только обработанные контейнеры"
+            )
+            await self.binding_manager.mark_order_processed(order_id)
+            self.session_processed_orders.add(order_id)
+            return
+
+        container_numbers = [c.container_number.strip() for c in filtered_containers]
         self.logger.info(
-            f"📡 Обработка заявки {order_id}: {len(containers)} контейнеров"
+            f"📡 Обработка заявки {order_id}: {len(filtered_containers)} контейнеров"
         )
-        
+
         try:
             # Получаем данные заявки одним запросом для всех контейнеров
             order_data = await self.api_client.get_order_tracking(session, order_id)
-            
+
             # Проверяем кэш на изменения
             cache_key = f"order_last_check:{order_id}"
             last_check_data = await self.cache.get(cache_key)
-            
+
             # Извлекаем текущие данные для сравнения
             current_order_summary = self._extract_order_summary(order_data, container_numbers)
-            
+
             if last_check_data and self._data_unchanged(last_check_data, current_order_summary):
                 self.logger.debug(f"💾 Данные заявки {order_id} не изменились")
-                self.engine_stats.api_calls_saved += len(containers)
-                
+                self.engine_stats.api_calls_saved += len(filtered_containers)
+
                 # Отмечаем заявку как обработанную в сессии
                 await self.binding_manager.mark_order_processed(order_id)
                 self.session_processed_orders.add(order_id)
                 return
-            
+
             # Данные изменились - обрабатываем каждый контейнер
             self.logger.info(f"🔄 Данные заявки {order_id} изменились, обрабатываем детально")
-            
+
             # Создаем задачи для параллельной обработки контейнеров
-            container_tasks = []
-            for container in containers:
-                if await self.binding_manager.is_container_processed(container.container_number):
-                    self.logger.debug(
-                        f"♻️ Контейнер {container.container_number} уже был обработан, пропускаем"
-                    )
-                    continue
-                    continue
-                task = self._process_single_container(
-                    session, container, order_id, order_data, prefer_earliest=use_railway_mappings  # Передаем ContainerInfo
+            container_tasks = [
+                self._process_single_container(
+                    session,
+                    container,
+                    order_id,
+                    order_data,
+                    prefer_earliest=use_railway_mappings,
                 )
-                container_tasks.append(task)
-            
+                for container in filtered_containers
+            ]
+
             # Выполняем параллельно с ограничением
             semaphore = asyncio.Semaphore(self.config.api.max_parallel)
-            
+
             async def process_with_semaphore(task):
                 async with semaphore:
                     return await task
-            
+
             results = await asyncio.gather(
                 *[process_with_semaphore(task) for task in container_tasks],
-                return_exceptions=True
+                return_exceptions=True,
             )
-            
+
             # Обрабатываем результаты с явной типизацией
             successful_results: List[Tuple[ContainerInfo, TrackingResult]] = []
-            for i, result in enumerate(results):
+            for container, result in zip(filtered_containers, results):
                 # Увеличиваем счетчик обработанных в любом случае
                 self.engine_stats.containers_processed += 1
 
                 if isinstance(result, Exception):
                     # Это исключение - логируем и пропускаем
                     self.logger.error(
-                        f"❌ Ошибка обработки {containers[i].container_number}: {result}"
+                        f"❌ Ошибка обработки {container.container_number}: {result}"
                     )
                     continue
 
                 # Явная проверка типа для IDE
                 if not isinstance(result, TrackingResult):
                     self.logger.error(
-                        f"❌ Неожиданный тип результата для {containers[i].container_number}: {type(result)}"
+                        f"❌ Неожиданный тип результата для {container.container_number}: {type(result)}"
                     )
                     continue
 
                 # Теперь IDE точно знает, что result это TrackingResult
                 tracking_result: TrackingResult = result  # Explicit cast для IDE
                 if tracking_result.success:
-                    successful_results.append((containers[i], tracking_result))
+                    successful_results.append((container, tracking_result))
                     self.engine_stats.containers_successful += 1
                 else:
                     # Результат получен, но не успешный
                     error_msg = tracking_result.error_message or "Неизвестная ошибка"
                     self.logger.debug(
-                        f"⚠️ Неуспешная обработка {containers[i].container_number}: {error_msg}"
+                        f"⚠️ Неуспешная обработка {container.container_number}: {error_msg}"
                     )
-            
+
             # ИЗМЕНЕНО: Записываем результаты напрямую в Firebird
             if successful_results:
                 await self._write_results_to_firebird(successful_results)
@@ -340,12 +356,12 @@ class ContainerTrackingEngine:
             # Обновляем кэш проверки
             ttl_seconds = self.config.cache.ttl_hours * 3600
             await self.cache.set(cache_key, enriched_summary, ttl_seconds=ttl_seconds)
-            
+
             # Отмечаем заявку как обработанную
             await self.binding_manager.mark_order_processed(order_id)
             self.session_processed_orders.add(order_id)
             self.engine_stats.orders_processed += 1
-            
+
         except Exception as e:
             self.logger.error(f"❌ Ошибка обработки заявки {order_id}: {e}")
     
@@ -435,34 +451,10 @@ class ContainerTrackingEngine:
 
                 for entity_column, (event, mapping) in mapping_events.items():
                     new_value = event.date
-                    if entity_column in container_info.current_dates:
-                        stored_value = container_info.current_dates.get(entity_column)
-                        if not new_value:
-                            continue
-                if (
-                    new_remaining is not None
-                    and container_info.remaining_distance is not None
-                    and new_remaining == container_info.remaining_distance
-                ):
-                    db_remaining = await self.firebird_manager.get_remaining_distance(container_info.id)
-                    if db_remaining == container_info.remaining_distance:
-                        self.logger.debug(
-                            f"⏭️ {container_info.container_number}: remaining distance unchanged"
-                        )
+                    if not new_value:
                         continue
 
-                if mapping and mapping.entity_column in container_info.current_dates:
-                    new_value = (
-                        tracking_result.last_event.date if tracking_result.last_event else None
-                    )
-                    stored_value = container_info.current_dates.get(mapping.entity_column)
-
-                    if new_value is None:
-                        self.logger.debug(
-                            f"⏭️ {container_info.container_number}: empty value for {mapping.entity_column}"
-                        )
-                        continue
-
+                    stored_value = container_info.current_dates.get(entity_column)
                     if stored_value:
                         parsed_new = self.firebird_manager.transformer.transform_value(
                             new_value, mapping.column_datatype
@@ -476,8 +468,6 @@ class ContainerTrackingEngine:
                             and parsed_new >= parsed_stored
                         ):
                             continue
-                        if parsed_new is None:
-                            continue
                     events_to_update.append(event)
                     event_mappings.append((event, mapping))
 
@@ -486,7 +476,14 @@ class ContainerTrackingEngine:
                     and container_info.remaining_distance is not None
                     and new_remaining == container_info.remaining_distance
                 ):
-                    new_remaining = None
+                    db_remaining = await self.firebird_manager.get_remaining_distance(
+                        container_info.id
+                    )
+                    if db_remaining == container_info.remaining_distance:
+                        self.logger.debug(
+                            f"⏭️ {container_info.container_number}: remaining distance unchanged"
+                        )
+                        new_remaining = None
 
                 if (
                     remaining_event

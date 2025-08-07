@@ -462,9 +462,14 @@ class ContainerTrackingEngine:
                             )
                             continue
                 # КЛЮЧЕВОЕ: Используем container_info.id для обновления записи
+                events_for_update = (
+                    tracking_result.events
+                    if getattr(tracking_result, "events", None)
+                    else ([tracking_result.last_event] if tracking_result.last_event else [])
+                )
                 success = await self.firebird_manager.update_container_from_tracking(
                     container_info.id,  # ID записи в entity таблице
-                    tracking_result
+                    events_for_update
                 )
                 
                 if success and mapping:

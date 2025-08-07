@@ -64,8 +64,8 @@ class DummyFirebirdManager:
         self.contractor_called = True
         yield self.containers
 
-    async def update_container_from_tracking(self, container_id, tracking_result):
-        self.updated.append(container_id)
+    async def update_container_from_tracking(self, container_id, events):
+        self.updated.append((container_id, events))
         return True
 
     async def get_entity_statistics(self):
@@ -115,7 +115,39 @@ async def test_run_full_workflow_groups_and_updates():
     assert stats.records_written == 3
     assert stats.orders_processed == 2
     assert sorted(order_calls) == [("ORD1", 2), ("ORD2", 1)]
-    assert firebird.updated == [1, 2, 3]
+    assert [cid for cid, _ in firebird.updated] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_multiple_events_per_container():
+    container = ContainerInfo(id=1, container_number="CONT1", line_id=1, current_dates={})
+    firebird = DummyFirebirdManager([container])
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    event1 = ContainerEvent(date="2024-01-01", operation="Load", location="A")
+    event2 = ContainerEvent(date="2024-01-02", operation="Unload", location="B")
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data, prefer_earliest=False):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = event2
+        res.events = [event1, event2]
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert len(firebird.updated) == 1
+    cid, events = firebird.updated[0]
+    assert cid == 1
+    assert [e.operation for e in events] == ["Load", "Unload"]
 
 @pytest.mark.asyncio
 async def test_skip_update_if_existing_date_is_earlier():
@@ -184,6 +216,16 @@ async def test_skip_already_processed_container():
     engine = ContainerTrackingEngine(config, cache, firebird)
 
     await engine.binding_manager.mark_container_processed("CONT1")
+
+    async def filtered_get_containers(self, batch_size=100, target_line_ids=None):
+        if await engine.binding_manager.is_container_processed("CONT1"):
+            yield []
+        else:
+            yield self.containers
+
+    firebird.get_containers_for_processing = types.MethodType(
+        filtered_get_containers, firebird
+    )
 
     engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
     engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})

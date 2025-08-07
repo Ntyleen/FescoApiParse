@@ -21,7 +21,7 @@ from datetime import datetime, date
 from enum import IntEnum
 from contextlib import contextmanager, asynccontextmanager
 import re
-from models.container_event import TrackingResult
+from models.container_event import ContainerEvent
 from utils.logging import get_logger
 
 try:
@@ -1061,103 +1061,126 @@ class FirebirdEntityManager:
     # =========================================================================
     
     async def update_container_from_tracking(
-        self, 
+        self,
         container_id: int,
-        tracking_result: TrackingResult
+        events: ContainerEvent | List[ContainerEvent],
     ) -> bool:
         """
         Обновить контейнер данными трекинга FESCO
-                
+
         Args:
             container_id: ID записи в entity таблице
-            tracking_result: Результат трекинга от FESCO API
-            
+            events: одно событие или список событий трекинга
+
         Returns:
             True если обновление успешно
         """
-        
-        if not tracking_result.success or not tracking_result.last_event:
-            self.logger.debug(f"⏭️ Пропускаем обновление ID {container_id}: нет данных трекинга")
+
+        events_list = events if isinstance(events, list) else [events]
+
+        if not events_list:
+            self.logger.debug(
+                f"⏭️ Пропускаем обновление ID {container_id}: нет данных трекинга"
+            )
             return False
-        
-        # Находим подходящий маппинг
-        operation = tracking_result.last_event.operation
-        date_mapping = self.operation_matcher.find_best_mapping(operation)  # type: ignore
 
         update_data: Dict[str, Any] = {}
-        
-        if not date_mapping:
-            self.logger.debug(f"🤷 Не найден маппинг для операции: {operation}")
-        
-        # Подготавливаем данные для обновления
-        else:
-            update_data = self._prepare_update_data(tracking_result, date_mapping)
+        mappings_used: List[EntityColumnMapping] = []
 
-        # Трансформируем оставшееся расстояние (TRACING_DAYS)
-        remaining_raw = getattr(tracking_result.last_event, "remainingDistance", None)
-        if remaining_raw is not None:
-            remaining_transformed = self.transformer.transform_value(remaining_raw, "INTEGER")
-            if remaining_transformed is not None:
-                update_data[self.entity_config.remaining_distance] = remaining_transformed
-        
+        for event in events_list:
+            operation = event.operation
+            date_mapping = (
+                self.operation_matcher.find_best_mapping(operation)
+                if operation
+                else None
+            )
+
+            if not date_mapping:
+                self.logger.debug(f"🤷 Не найден маппинг для операции: {operation}")
+            else:
+                prepared = self._prepare_update_data(event, date_mapping)
+                if prepared:
+                    update_data.update(prepared)
+                    mappings_used.append(date_mapping)
+
+            remaining_raw = getattr(event, "remainingDistance", None)
+            if remaining_raw is not None:
+                remaining_transformed = self.transformer.transform_value(
+                    remaining_raw, "INTEGER"
+                )
+                if remaining_transformed is not None:
+                    update_data[self.entity_config.remaining_distance] = (
+                        remaining_transformed
+                    )
+
         if not update_data:
             self.logger.debug(f"📭 Нет данных для обновления ID {container_id}")
             return False
-        
-        mapping_for_logging = date_mapping or self.entity_config.date_mappings.get(self.entity_config.remaining_distance)
+
+        mapping_for_logging = mappings_used[-1] if mappings_used else self.entity_config.date_mappings.get(self.entity_config.remaining_distance)
 
         # Выполняем обновление
         def _update_sync():
-            return self._sync_update_entity_record(container_id, update_data, mapping_for_logging)
-        
+            return self._sync_update_entity_record(
+                container_id, update_data, mapping_for_logging
+            )
+
         try:
             async with self._get_thread_pool() as thread_pool:
                 loop = asyncio.get_event_loop()
                 success = await loop.run_in_executor(thread_pool, _update_sync)
-                
+
                 if success:
-                    if date_mapping and date_mapping.entity_column in update_data:
-                        self.stats.record_update_success(date_mapping.entity_column, operation)  # type: ignore
+                    for mapping, event in zip(mappings_used, events_list):
+                        if mapping.entity_column in update_data:
+                            self.stats.record_update_success(
+                                mapping.entity_column, event.operation
+                            )  # type: ignore
                     if self.entity_config.remaining_distance in update_data:
-                        self.stats.record_update_success(self.entity_config.remaining_distance, operation)
+                        self.stats.record_update_success(
+                            self.entity_config.remaining_distance, None
+                        )
                 else:
                     self.stats.record_update_failure()
-                
+
                 return success
-                
+
         except Exception as e:
-            self.logger.error(f"❌ Ошибка async обновления контейнера {container_id}: {e}")
+            self.logger.error(
+                f"❌ Ошибка async обновления контейнера {container_id}: {e}"
+            )
             self.stats.record_update_failure()
             return False
-    
+
     def _prepare_update_data(
-        self, 
-        tracking_result: TrackingResult, 
-        date_mapping: EntityColumnMapping
+        self,
+        event: ContainerEvent,
+        date_mapping: EntityColumnMapping,
     ) -> Dict[str, Any]:
         """Подготовить данные для обновления"""
-        
+
         update_data = {}
-        
+
         # Получаем значение по полю маппинга
         if date_mapping.fesco_field == "date":
-            raw_value = getattr(tracking_result.last_event, "date", None)
+            raw_value = getattr(event, "date", None)
         elif date_mapping.fesco_field == "remainingDistance":
-            raw_value = getattr(tracking_result.last_event, "remainingDistance", None)
+            raw_value = getattr(event, "remainingDistance", None)
         else:
-            raw_value = getattr(tracking_result.last_event, date_mapping.fesco_field, None)
-        
+            raw_value = getattr(event, date_mapping.fesco_field, None)
+
         if raw_value:
             # 🔧 КЛЮЧЕВОЕ МЕСТО: выбираем трансформацию по типу колонки
             transformed_value = self.transformer.transform_value(
-                raw_value, 
-                date_mapping.column_datatype
+                raw_value, date_mapping.column_datatype
             )
-            
+
             if transformed_value is not None:
                 update_data[date_mapping.entity_column] = transformed_value
-                self.logger.debug(f"🔗 Маппинг: {raw_value} → {date_mapping.entity_column} = {transformed_value}")
-        
+                self.logger.debug(
+                    f"🔗 Маппинг: {raw_value} → {date_mapping.entity_column} = {transformed_value}"
+                )
+
         return update_data
     
     def _sync_update_entity_record(

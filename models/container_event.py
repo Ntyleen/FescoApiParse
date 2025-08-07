@@ -1,5 +1,5 @@
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
@@ -30,6 +30,9 @@ class TrackingResult:
     
     # Основное событие
     last_event: ContainerEvent | None = None
+
+    # Все события
+    events: list[ContainerEvent] = field(default_factory=list)
     
     # Метаданные
     events_source: str = "unknown"  # "order", "container", "merged", "no_events"
@@ -43,4 +46,6 @@ class TrackingResult:
     @property
     def success(self) -> bool:
         """Успешно ли обработан контейнер"""
-        return self.error_message is None and (self.last_event is not None and not self.last_event.is_empty())
+        return self.error_message is None and (
+            self.last_event is not None and not self.last_event.is_empty()
+        )

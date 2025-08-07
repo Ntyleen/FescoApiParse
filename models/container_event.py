@@ -1,5 +1,6 @@
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List
 
 
 @dataclass(slots=True)
@@ -27,10 +28,13 @@ class TrackingResult:
     """Результат трекинга контейнера"""
     container_number: str
     order_id: str | None = None
+
+    # Список всех событий
+    events: List[ContainerEvent] = field(default_factory=list)
     
     # Основное событие
     last_event: ContainerEvent | None = None
-    
+
     # Метаданные
     events_source: str = "unknown"  # "order", "container", "merged", "no_events"
     has_duplicates: bool = False
@@ -39,8 +43,13 @@ class TrackingResult:
     
     def __post_init__(self):
         self.processing_time = datetime.now().isoformat()
-    
+
     @property
     def success(self) -> bool:
         """Успешно ли обработан контейнер"""
-        return self.error_message is None and (self.last_event is not None and not self.last_event.is_empty())
+        return (
+            self.error_message is None
+            and self.last_event is not None
+            and not self.last_event.is_empty()
+        )
+

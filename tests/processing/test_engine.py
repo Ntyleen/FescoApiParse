@@ -46,10 +46,12 @@ class DummyFirebirdManager:
         self.entity_config = MagicMock(date_railway_loading="DATE_RAILWAY_LOADING")
         mapping = MagicMock()
         mapping.entity_column = "DATE_ETA"
+        mapping.column_datatype = "DATE"
         self.operation_matcher = MagicMock(
             find_best_mapping=MagicMock(return_value=mapping),
             set_railway_mode=MagicMock(),
         )
+        self.transformer = MagicMock(transform_value=MagicMock(side_effect=lambda v, t: v))
         self.processing_called = False
         self.contractor_called = False
 
@@ -95,7 +97,9 @@ async def test_run_full_workflow_groups_and_updates():
     async def dummy_process_single_container(self, session, container, order_id, order_data, prefer_earliest=False):
         res = TrackingResult(container_number=container.container_number)
         res.order_id = order_id
-        res.last_event = ContainerEvent(date="2024-01-01", operation="Load", location="Test")
+        ev = ContainerEvent(date="2024-01-01", operation="Load", location="Test")
+        res.events = [ev]
+        res.last_event = ev
         return res
 
     engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
@@ -141,11 +145,13 @@ async def test_skip_update_if_existing_date_is_earlier():
     async def dummy_process_single_container(self, session, container, order_id, order_data, prefer_earliest=False):
         res = TrackingResult(container_number=container.container_number)
         res.order_id = order_id
-        res.last_event = ContainerEvent(
+        ev = ContainerEvent(
             date="2024-02-01",
             operation="Отправление вагона со станции",
             location="Test",
         )
+        res.events = [ev]
+        res.last_event = ev
         return res
 
     engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
@@ -214,7 +220,9 @@ async def test_sequential_passes_switch_mappings():
     async def dummy_process_single_container(self, session, container, order_id, order_data, prefer_earliest=False):
         res = TrackingResult(container_number=container.container_number)
         res.order_id = order_id
-        res.last_event = ContainerEvent(date="2024-01-01", operation="Load", location="Test")
+        ev = ContainerEvent(date="2024-01-01", operation="Load", location="Test")
+        res.events = [ev]
+        res.last_event = ev
         return res
 
     engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
@@ -242,6 +250,7 @@ async def test_prefer_earliest_passed_for_railway_mode():
     engine._process_single_container = AsyncMock(
         return_value=TrackingResult(
             container_number="CONT1",
+            events=[ContainerEvent(date="2024-01-01", operation="Load")],
             last_event=ContainerEvent(date="2024-01-01", operation="Load"),
         )
     )

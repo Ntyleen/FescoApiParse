@@ -87,7 +87,8 @@ def test_merge_only_order_events(processor, sample_order_data):
     merged, dedup, source = processor.merge_and_deduplicate(order_events, [])
     assert source == "order"
     assert dedup is False
-    assert isinstance(merged, ContainerEvent)
+    assert len(merged) == 1
+    assert isinstance(merged[0], ContainerEvent)
 
 
 def test_merge_only_container_events(processor, sample_container_data):
@@ -95,7 +96,8 @@ def test_merge_only_container_events(processor, sample_container_data):
     merged, dedup, source = processor.merge_and_deduplicate([], container_events)
     assert source == "container"
     assert dedup is False
-    assert isinstance(merged, ContainerEvent)
+    assert len(merged) == 1
+    assert isinstance(merged[0], ContainerEvent)
 
 
 def test_merge_duplicate_events(processor, sample_order_data, sample_container_data):
@@ -104,16 +106,18 @@ def test_merge_duplicate_events(processor, sample_order_data, sample_container_d
     merged, dedup, source = processor.merge_and_deduplicate(order_events, container_events)
     assert source == "merged"
     assert dedup is True
-    assert merged.transport == "Ship"
+    assert len(merged) == 1
+    assert merged[0].transport == "Ship"
 
 
 def test_merge_different_events_prefers_container(processor, sample_order_data, different_container_data):
     order_events = processor.extract_order_events(sample_order_data, "ORD123", "CONT1")
     container_events = processor.extract_container_events(different_container_data)
     merged, dedup, source = processor.merge_and_deduplicate(order_events, container_events)
-    assert source == "container"
+    assert source == "merged"
     assert dedup is False
-    assert merged.operation == "Погружен"
+    assert len(merged) == 2
+    assert merged[-1].operation == "Погружен"
 
 
 def test_get_best_event_with_malformed_dates(processor):

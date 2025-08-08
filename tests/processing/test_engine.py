@@ -45,20 +45,35 @@ class DummyFirebirdManager:
         self.db_remaining = db_remaining or {c.id: c.remaining_distance for c in containers}
         self.updated = []
         self.entity_config = MagicMock(date_railway_loading="DATE_RAILWAY_LOADING")
-        mapping = MagicMock()
-        mapping.entity_column = "DATE_ETA"
-        mapping.column_datatype = "DATE"
-        self.operation_matcher = MagicMock(
-            find_best_mapping=MagicMock(return_value=mapping),
-            set_railway_mode=MagicMock(),
+        load_mapping = MagicMock()
+        load_mapping.entity_column = "DATE_LOAD"
+        load_mapping.column_datatype = "DATE"
+        unload_mapping = MagicMock()
+        unload_mapping.entity_column = "DATE_UNLOAD"
+        unload_mapping.column_datatype = "DATE"
+
+        self.operation_matcher = MagicMock()
+        self.operation_matcher.find_best_mapping.return_value = None
+
+        def mapping_side_effect(operation):
+            override = self.operation_matcher.find_best_mapping.return_value
+            if override is not None:
+                return override
+            if operation and "Unload" in operation:
+                return unload_mapping
+            return load_mapping
+
+        self.operation_matcher.find_best_mapping.side_effect = mapping_side_effect
+        self.operation_matcher.set_railway_mode = MagicMock()
+        self.transformer = MagicMock(
+            transform_value=lambda v, dt: int(v.replace("-", "")) if v is not None else None
         )
-        self.transformer = MagicMock(transform_value=MagicMock(side_effect=lambda v, t: v))
-        self.transformer = MagicMock(transform_value=lambda v, dt: int(v) if v is not None else None)
         self.processing_called = False
         self.contractor_called = False
+        self.closed = False
 
     async def test_connection(self):
-        return True
+        return not self.closed
 
     async def get_containers_for_processing(self, batch_size=100, target_line_ids=None):
         self.processing_called = True
@@ -68,8 +83,11 @@ class DummyFirebirdManager:
         self.contractor_called = True
         yield self.containers
 
-    async def update_container_from_tracking(self, container_id, events):
-        self.updated.append((container_id, events))
+    async def update_container_from_tracking(self, container_id, result):
+        if hasattr(result, "events") and result.events:
+            self.updated.append((container_id, result.events))
+        else:
+            self.updated.append(container_id)
         return True
 
     async def get_remaining_distance(self, container_id):
@@ -79,7 +97,7 @@ class DummyFirebirdManager:
         return {"runtime_stats": {"records_updated": len(self.updated)}}
 
     async def close(self):
-        pass
+        self.closed = True
 
 
 @pytest.mark.asyncio
@@ -196,6 +214,38 @@ async def test_skip_update_if_existing_date_is_earlier():
     await engine.run_full_workflow(batch_size=10)
 
     assert firebird.updated == []
+
+
+@pytest.mark.asyncio
+async def test_workflows_run_sequentially_with_shared_connection():
+    container = ContainerInfo(id=1, container_number="CONT1", line_id=1, current_dates={})
+    firebird = DummyFirebirdManager([container])
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data, prefer_earliest=False):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.events = []
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+    assert firebird.processing_called
+    assert not firebird.closed
+
+    await engine.run_full_workflow(batch_size=10, target_railway_carrier_ids={1})
+    assert firebird.contractor_called
+    assert not firebird.closed
+
+    await firebird.close()
+    assert firebird.closed
 
 
 @pytest.mark.asyncio

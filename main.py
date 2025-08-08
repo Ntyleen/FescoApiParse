@@ -118,30 +118,33 @@ class FescoTracker:
         try:
             # Пробуем использовать новый Engine
             from processing import create_tracking_engine
-            
+
             engine = await create_tracking_engine(
                 self.config,
                 cache_type="auto"
             )
-            
+
             self.logger.info("🎼 Используем ContainerTrackingEngine") # type: ignore
-            
-            stats = await engine.run_full_workflow(
-                batch_size=batch_size,
-                target_line_ids=set(self.config.database.target_line_ids) # type: ignore
-            )
 
-            self._print_engine_stats(stats)
-
-            contractor_ids = set(getattr(self.config.database, "target_railway_carrier_ids", []))
-            if contractor_ids:
-                self.logger.info("🚂 Запуск обработки ЖД подрядчиков") # type: ignore
+            try:
                 stats = await engine.run_full_workflow(
                     batch_size=batch_size,
-                    target_railway_carrier_ids=contractor_ids,
+                    target_line_ids=set(self.config.database.target_line_ids) # type: ignore
                 )
+
                 self._print_engine_stats(stats)
-            
+
+                contractor_ids = set(getattr(self.config.database, "target_railway_carrier_ids", []))
+                if contractor_ids:
+                    self.logger.info("🚂 Запуск обработки ЖД подрядчиков") # type: ignore
+                    stats = await engine.run_full_workflow(
+                        batch_size=batch_size,
+                        target_railway_carrier_ids=contractor_ids,
+                    )
+                    self._print_engine_stats(stats)
+            finally:
+                await engine.firebird_manager.close()
+
         except ImportError:
             self.logger.warning("⚠️ ContainerTrackingEngine недоступен, используем legacy режим")
             await self._run_legacy_db_mode(batch_size)

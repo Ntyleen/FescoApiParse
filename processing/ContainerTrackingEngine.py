@@ -168,7 +168,9 @@ class ContainerTrackingEngine:
         # Обрабатываем каждую группу заявки
         for order_id, container_group in order_groups.items():
             if order_id:  # Пропускаем контейнеры без заявок
-                await self._process_order_group(session, order_id, container_group)
+                await self._process_order_group(
+                    session, order_id, container_group, use_railway_mappings
+                )
     
     async def _group_containers_by_orders(
         self, 
@@ -231,7 +233,8 @@ class ContainerTrackingEngine:
         self,
         session: aiohttp.ClientSession,
         order_id: str,
-        containers: List[ContainerInfo]  # ИЗМЕНЕНО: ContainerInfo
+        containers: List[ContainerInfo],  # ИЗМЕНЕНО: ContainerInfo
+        use_railway_mappings: bool = False,
     ) -> None:
         """
         Обработка группы контейнеров одной заявки
@@ -418,6 +421,13 @@ class ContainerTrackingEngine:
         written_count = 0
         for container_info, tracking_result in container_results:
             try:
+                mapping_events, remaining_event = (
+                    self.firebird_manager.operation_matcher.map_events(
+                        tracking_result.events
+                    )
+                    if getattr(tracking_result, "events", None)
+                    else ({}, None)
+                )
                 mapping = self.firebird_manager.operation_matcher.find_best_mapping(
                     tracking_result.last_event.operation    # type: ignore
                 ) if tracking_result.last_event else None

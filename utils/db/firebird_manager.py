@@ -21,7 +21,7 @@ from datetime import datetime, date
 from enum import IntEnum
 from contextlib import contextmanager, asynccontextmanager
 import re
-from models.container_event import TrackingResult
+from models.container_event import TrackingResult, ContainerEvent
 from utils.logging import get_logger
 
 try:
@@ -565,6 +565,35 @@ class FirebirdOperationMatcher:
         
         self.logger.debug(f"🎯 Выбран маппинг: {best_mapping.entity_column} (score: {best_score:.3f})")
         return best_mapping
+
+    def map_events(
+        self, events: List[ContainerEvent]
+    ) -> Tuple[Dict[str, Tuple[ContainerEvent, EntityColumnMapping]], Optional[ContainerEvent]]:
+        """Сопоставить события с колонками entity.
+
+        Возвращает:
+            tuple: (маппинги событий по колонкам, событие с remaining distance)
+        """
+        mapping_events: Dict[str, Tuple[ContainerEvent, EntityColumnMapping]] = {}
+        remaining_event: Optional[ContainerEvent] = None
+
+        if not events:
+            return mapping_events, None
+
+        for event in events:
+            if not event.operation:
+                continue
+
+            mapping = self.find_best_mapping(event.operation)
+            if not mapping:
+                continue
+
+            if mapping.entity_column == self.entity_config.remaining_distance:
+                remaining_event = event
+            else:
+                mapping_events[mapping.entity_column] = (event, mapping)
+
+        return mapping_events, remaining_event
     
     def suggest_new_mappings(self, unmapped_operations: List[str]) -> Dict[str, List[str]]:
         """

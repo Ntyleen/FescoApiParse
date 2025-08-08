@@ -116,7 +116,7 @@ class ContainerTrackingEngine:
         
         try:
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                
+
                 if use_railway:
                     container_source = self.firebird_manager.get_containers_for_contractors(
                         batch_size=batch_size,
@@ -129,19 +129,18 @@ class ContainerTrackingEngine:
                     )
 
                 async for batch in container_source:
-                    await self._process_container_batch(session, batch, use_railway_mappings=use_railway)
+                    await self._process_container_batch(
+                        session, batch, use_railway_mappings=use_railway
+                    )
                     self.engine_stats.firebird_read_batches += 1
-                
+
                 # Финальная статистика
                 await self._log_final_statistics()
-                
+
         except Exception as e:
             self.logger.error(f"❌ Критическая ошибка в workflow: {e}")
             raise
-        finally:
-            # НОВОЕ: Закрываем Firebird ресурсы
-            await self.firebird_manager.close()
-        
+
         return self.engine_stats
     
     async def _process_container_batch(
@@ -407,22 +406,26 @@ class ContainerTrackingEngine:
         for container_info, tracking_result in container_results:
             try:
                 events = tracking_result.events or []
-                if not events:
-                    continue
-
                 mapping_events: Dict[str, Tuple[ContainerEvent, Any]] = {}
                 remaining_event: ContainerEvent | None = None
 
-                for event in events:
-                    if remaining_event is None and event.remainingDistance is not None:
-                        remaining_event = event
-                    if not event.operation:
-                        continue
-                    mapping = self.firebird_manager.operation_matcher.find_best_mapping(
-                        event.operation  # type: ignore
-                    )
-                    if mapping and mapping.entity_column not in mapping_events:
-                        mapping_events[mapping.entity_column] = (event, mapping)
+                if not events and tracking_result.last_event:
+                    if tracking_result.last_event.remainingDistance is not None:
+                        remaining_event = tracking_result.last_event
+                else:
+                    for event in events:
+                        if remaining_event is None and event.remainingDistance is not None:
+                            remaining_event = event
+                        if not event.operation:
+                            continue
+                        mapping = self.firebird_manager.operation_matcher.find_best_mapping(
+                            event.operation  # type: ignore
+                        )
+                        if mapping and mapping.entity_column not in mapping_events:
+                            mapping_events[mapping.entity_column] = (event, mapping)
+
+                if not events and remaining_event is None:
+                    continue
 
                 new_remaining = None
                 if remaining_event and remaining_event.remainingDistance is not None:
@@ -439,6 +442,24 @@ class ContainerTrackingEngine:
                         stored_value = container_info.current_dates.get(entity_column)
                         if not new_value:
                             continue
+                        if stored_value:
+                            parsed_new = self.firebird_manager.transformer.transform_value(
+                                new_value, mapping.column_datatype
+                            )
+                            parsed_stored = self.firebird_manager.transformer.transform_value(
+                                stored_value, mapping.column_datatype
+                            )
+                            if (
+                                parsed_new is not None
+                                and parsed_stored is not None
+                                and parsed_new >= parsed_stored
+                            ):
+                                continue
+                            if parsed_new is None:
+                                continue
+                    events_to_update.append(event)
+                    event_mappings.append((event, mapping))
+
                 if (
                     new_remaining is not None
                     and container_info.remaining_distance is not None
@@ -451,45 +472,9 @@ class ContainerTrackingEngine:
                         )
                         continue
 
-                if mapping and mapping.entity_column in container_info.current_dates:
-                    new_value = (
-                        tracking_result.last_event.date if tracking_result.last_event else None
-                    )
-                    stored_value = container_info.current_dates.get(mapping.entity_column)
-
-                    if new_value is None:
-                        self.logger.debug(
-                            f"⏭️ {container_info.container_number}: empty value for {mapping.entity_column}"
-                        )
-                        continue
-
-                    if stored_value:
-                        parsed_new = self.firebird_manager.transformer.transform_value(
-                            new_value, mapping.column_datatype
-                        )
-                        parsed_stored = self.firebird_manager.transformer.transform_value(
-                            stored_value, mapping.column_datatype
-                        )
-                        if (
-                            parsed_new is not None
-                            and parsed_stored is not None
-                            and parsed_new >= parsed_stored
-                        ):
-                            continue
-                        if parsed_new is None:
-                            continue
-                    events_to_update.append(event)
-                    event_mappings.append((event, mapping))
-
                 if (
-                    new_remaining is not None
-                    and container_info.remaining_distance is not None
-                    and new_remaining == container_info.remaining_distance
-                ):
-                    new_remaining = None
-
-                if (
-                    remaining_event
+                    events_to_update
+                    and remaining_event
                     and remaining_event not in events_to_update
                     and new_remaining is not None
                 ):

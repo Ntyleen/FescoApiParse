@@ -454,15 +454,6 @@ class FirebirdDateTransformer:
 
         cleaned = str(date_str).strip()
 
-        # ISO формат с таймзоной
-        try:
-            dt = datetime.fromisoformat(cleaned)
-            if dt.tzinfo:
-                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-            return dt
-        except ValueError:
-            pass
-
         # Пробуем форматы с временем
         for fmt in self._timestamp_formats:
             try:

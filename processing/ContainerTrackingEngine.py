@@ -4,7 +4,7 @@
 """
 
 import asyncio
-from typing import List, Dict, Set, AsyncGenerator, Optional, Union, Tuple
+from typing import List, Dict, Set, AsyncGenerator, Optional, Union, Tuple, Any
 import aiohttp
 from dataclasses import dataclass
 
@@ -22,7 +22,7 @@ from utils.db.firebird_manager import (
     create_firebird_entity_manager
 )
 
-from models.container_event import TrackingResult
+from models.container_event import TrackingResult, ContainerEvent
 from models.processing_stats import ProcessingStats
 from utils.logging import get_logger
 
@@ -365,14 +365,16 @@ class ContainerTrackingEngine:
                 order_data, order_id, container.container_number
             )
             container_events = self.event_processor.extract_container_events(container_data)
-            
+
             final_event, has_duplicates, source = self.event_processor.merge_and_deduplicate(
                 order_events, container_events
             )
-            
+
             result.last_event = final_event
             result.has_duplicates = has_duplicates
             result.events_source = source
+            # Сохраняем все события для последующей агрегации дат
+            result.events = [*order_events, *container_events]
             
             if has_duplicates:
                 self.stats.deduplicated_events += 1
@@ -384,136 +386,89 @@ class ContainerTrackingEngine:
             return result
     
     async def _write_results_to_firebird(
-        self, 
+        self,
         container_results: List[Tuple[ContainerInfo, TrackingResult]]
     ) -> None:
-
-        
         written_count = 0
         for container_info, tracking_result in container_results:
             try:
-                mapping = self.firebird_manager.operation_matcher.find_best_mapping(
-                    tracking_result.last_event.operation    # type: ignore
-                ) if tracking_result.last_event else None
-
-                new_remaining_raw = (
-                    tracking_result.last_event.remainingDistance
-                    if tracking_result.last_event else None
-                )
-                new_remaining = None
-                if new_remaining_raw is not None:
-                    new_remaining = self.firebird_manager.transformer.transform_value(
-                        new_remaining_raw, "INTEGER"
-                    )
-
-                if (
-                    new_remaining is not None
-                    and container_info.remaining_distance is not None
-                    and new_remaining == container_info.remaining_distance
-                ):
-                    self.logger.debug(
-                        f"⏭️ {container_info.container_number}: remaining distance unchanged"
-                    )
-                    continue
-
-                if mapping and mapping.entity_column in container_info.current_dates:
-                    new_value = (
-                        tracking_result.last_event.date if tracking_result.last_event else None
-                    )
-                    stored_value = container_info.current_dates.get(mapping.entity_column)
-                    event_name = (
-                        tracking_result.last_event.operation if tracking_result.last_event else ""
-                    )
-
-                    if new_value is None:
-                        self.logger.debug(
-                            f"⏭️ {container_info.container_number}: empty value for {mapping.entity_column}"
-                        )
+                events = tracking_result.events or ([] if not tracking_result.last_event else [tracking_result.last_event])
+                date_in_col = self.firebird_manager.entity_config.date_in
+                remaining_col = self.firebird_manager.entity_config.remaining_distance
+                candidates = {}
+                date_in_events = []
+                for event in events:
+                    if not event or not event.operation:
                         continue
-
-                    parsed_new = self.firebird_manager.transformer.transform_value(
-                        new_value, mapping.column_datatype
-                    )
-                    if parsed_new is None:
-                        self.logger.debug(
-                            f"⏭️ {container_info.container_number}: unable to parse new value for {mapping.entity_column}"
-                        )
+                    mapping = self.firebird_manager.operation_matcher.find_best_mapping(event.operation)
+                    if not mapping or mapping.entity_column == remaining_col:
                         continue
-
-                    parsed_stored = None
-                    if stored_value:
-                        parsed_stored = self.firebird_manager.transformer.transform_value(
-                            stored_value, mapping.column_datatype
-                        )
-
-                    date_in_column = self.firebird_manager.entity_config.date_in
-                    if mapping.entity_column == date_in_column:
-                        is_do1 = event_name in ["Регистрация ДО1", "DO1 registration"]
-                        do1_overridden = container_info.processing_flags.get(
-                            "date_in_do1_overridden", False
-                        )
-
-                        if do1_overridden and not is_do1:
-                            self.logger.debug(
-                                f"⏭️ {container_info.container_number}: DATE_IN locked after DO1"
-                            )
-                            continue
-
-                        if is_do1:
-                            if do1_overridden:
-                                self.logger.debug(
-                                    f"⏭️ {container_info.container_number}: DATE_IN already overridden by DO1"
-                                )
-                                continue
-                            container_info.processing_flags[
-                                "date_in_do1_overridden"
-                            ] = True
-                            self.logger.debug(
-                                f"♻️ {container_info.container_number}: DATE_IN override by DO1"
-                            )
-                        else:
-                            if (
-                                parsed_stored is not None and parsed_new >= parsed_stored
-                            ):
-                                self.logger.debug(
-                                    f"⏭️ {container_info.container_number}: existing {mapping.entity_column} {stored_value} is earlier"
-                                )
-                                continue
+                    if not event.date:
+                        continue
+                    parsed = self.firebird_manager.transformer.transform_value(event.date, mapping.column_datatype)
+                    if parsed is None:
+                        self.logger.warning(f"⚠️ {container_info.container_number}: cannot parse '{event.date}' for {mapping.entity_column}")
+                        continue
+                    if mapping.entity_column == date_in_col:
+                        date_in_events.append((parsed, event, mapping))
                     else:
-                        if (
-                            stored_value
-                            and parsed_stored is not None
-                            and parsed_new >= parsed_stored
-                        ):
-                            self.logger.debug(
-                                f"⏭️ {container_info.container_number}: existing {mapping.entity_column} {stored_value} is earlier"
-                            )
+                        cur = candidates.get(mapping.entity_column)
+                        if cur is None or parsed < cur[0]:
+                            candidates[mapping.entity_column] = (parsed, event, mapping)
+                for column,(p_new,event,mapping) in candidates.items():
+                    stored_val = container_info.current_dates.get(column)
+                    p_stored = self.firebird_manager.transformer.transform_value(stored_val, mapping.column_datatype) if stored_val else None
+                    if p_stored is not None and p_new >= p_stored:
+                        self.logger.debug(f"⏭️ {container_info.container_number}: keep {column}={stored_val} <={event.date} id={container_info.id} src={event.operation}")
+                        continue
+                    tr = TrackingResult(container_number=tracking_result.container_number, last_event=ContainerEvent(date=event.date, operation=event.operation))
+                    if await self.firebird_manager.update_container_from_tracking(container_info.id, tr):
+                        container_info.current_dates[column] = event.date
+                        written_count += 1
+                        self.engine_stats.firebird_updates += 1
+                if date_in_events:
+                    date_in_events.sort(key=lambda x: x[0])
+                    for p_new,event,mapping in date_in_events:
+                        stored_val = container_info.current_dates.get(date_in_col)
+                        p_stored = self.firebird_manager.transformer.transform_value(stored_val, mapping.column_datatype) if stored_val else None
+                        is_do1 = event.operation in ["Регистрация ДО1","DO1 registration"]
+                        do1_over = container_info.processing_flags.get("date_in_do1_overridden", False)
+                        if do1_over and not is_do1:
+                            self.logger.debug(f"⏭️ {container_info.container_number}: DATE_IN locked after DO1")
                             continue
-                # КЛЮЧЕВОЕ: Используем container_info.id для обновления записи
-                success = await self.firebird_manager.update_container_from_tracking(
-                    container_info.id,  # ID записи в entity таблице
-                    tracking_result
-                )
-                
-                if success and mapping:
-                    container_info.current_dates[mapping.entity_column] = (
-                        tracking_result.last_event.date
-                        if tracking_result.last_event
-                        else container_info.current_dates.get(mapping.entity_column)
-                    )
-
-                if success and new_remaining is not None:
-                    container_info.remaining_distance = new_remaining
-
-                if success:
-                    written_count += 1
-                    self.engine_stats.firebird_updates += 1
-                    
+                        if is_do1:
+                            if do1_over:
+                                self.logger.debug(f"⏭️ {container_info.container_number}: DATE_IN already overridden by DO1")
+                                continue
+                            container_info.processing_flags["date_in_do1_overridden"] = True
+                            self.logger.debug(f"♻️ {container_info.container_number}: DATE_IN override by DO1")
+                        else:
+                            if p_stored is not None and p_new >= p_stored:
+                                self.logger.debug(f"⏭️ {container_info.container_number}: keep {date_in_col}={stored_val} <={event.date} id={container_info.id} src={event.operation}")
+                                continue
+                        tr = TrackingResult(container_number=tracking_result.container_number, last_event=ContainerEvent(date=event.date, operation=event.operation))
+                        if await self.firebird_manager.update_container_from_tracking(container_info.id, tr):
+                            container_info.current_dates[date_in_col] = event.date
+                            written_count += 1
+                            self.engine_stats.firebird_updates += 1
+                new_rem_raw = tracking_result.last_event.remainingDistance if tracking_result.last_event else None
+                if new_rem_raw is not None:
+                    new_rem = self.firebird_manager.transformer.transform_value(new_rem_raw, "INTEGER")
+                    if new_rem is not None and (container_info.remaining_distance is None or new_rem != container_info.remaining_distance):
+                        tr = TrackingResult(container_number=tracking_result.container_number, last_event=ContainerEvent(date=None, operation="", remainingDistance=new_rem_raw))
+                        if await self.firebird_manager.update_container_from_tracking(container_info.id, tr):
+                            container_info.remaining_distance = new_rem
+                            written_count += 1
+                            self.engine_stats.firebird_updates += 1
+                    else:
+                        self.logger.debug(f"⏭️ {container_info.container_number}: remaining distance unchanged")
             except Exception as e:
                 self.logger.error(f"❌ Ошибка записи {tracking_result.container_number}: {e}")
-        
         self.engine_stats.records_written += written_count
         self.logger.info(f"💾 Обновлено {written_count}/{len(container_results)} записей в Firebird")
+
+
+
     
     def _extract_order_summary(self, order_data: dict, container_numbers: List[str]) -> dict:
         """Извлечь краткую сводку заявки для проверки изменений"""

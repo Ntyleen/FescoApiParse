@@ -17,7 +17,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Any, Set, AsyncGenerator, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from enum import IntEnum
 from contextlib import contextmanager, asynccontextmanager
 import re
@@ -451,9 +451,18 @@ class FirebirdDateTransformer:
         """Трансформация в TIMESTAMP (дата + время)"""
         if not date_str or not str(date_str).strip():
             return None
-        
+
         cleaned = str(date_str).strip()
-        
+
+        # ISO формат с таймзоной
+        try:
+            dt = datetime.fromisoformat(cleaned)
+            if dt.tzinfo:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
+        except ValueError:
+            pass
+
         # Пробуем форматы с временем
         for fmt in self._timestamp_formats:
             try:

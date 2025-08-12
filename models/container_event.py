@@ -30,6 +30,8 @@ class TrackingResult:
     
     # Основное событие
     last_event: ContainerEvent | None = None
+    # Все события для контейнера (order + container)
+    events: list[ContainerEvent] | None = None
     
     # Метаданные
     events_source: str = "unknown"  # "order", "container", "merged", "no_events"

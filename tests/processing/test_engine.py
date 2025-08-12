@@ -5,6 +5,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from datetime import datetime, timezone
 
 # Ensure project root is on sys.path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
@@ -21,6 +22,14 @@ class SimpleTransformer:
         if datatype == "INTEGER":
             try:
                 return int(value)
+            except Exception:
+                return None
+        if datatype in ("DATE", "TIMESTAMP"):
+            try:
+                dt = datetime.fromisoformat(value)
+                if dt.tzinfo:
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                return dt if datatype == "TIMESTAMP" else dt.date()
             except Exception:
                 return None
         return value
@@ -373,3 +382,167 @@ async def test_remaining_distance_updates_only_on_change_and_is_latest():
     tr3 = TrackingResult(container_number="C1", last_event=ContainerEvent(date="2024-01-03", operation="Op", remainingDistance="3"))
     await engine._write_results_to_firebird([(container, tr3)])
     assert firebird.updated == [(1, '3')]
+
+
+@pytest.mark.asyncio
+async def test_date_generic_earliest_wins_across_multiple_events():
+    container = ContainerInfo(id=1, container_number="C1", line_id=1, current_dates={})
+    firebird = DummyFirebirdManager([])
+    mapping = MagicMock()
+    mapping.entity_column = "DATE_ETA"
+    mapping.column_datatype = "DATE"
+    firebird.operation_matcher.find_best_mapping.return_value = mapping
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    events = [
+        ContainerEvent(date="2024-03-01", operation="Op"),
+        ContainerEvent(date="2024-02-01", operation="Op"),
+    ]
+    tr = TrackingResult(container_number="C1", last_event=events[0], events=events)
+    await engine._write_results_to_firebird([(container, tr)])
+
+    assert container.current_dates["DATE_ETA"] == "2024-02-01"
+    assert firebird.updated == [(1, None)]
+
+
+@pytest.mark.asyncio
+async def test_date_generic_no_update_if_min_date_later_than_existing():
+    container = ContainerInfo(
+        id=1,
+        container_number="C1",
+        line_id=1,
+        current_dates={"DATE_ETA": "2024-01-01"},
+    )
+    firebird = DummyFirebirdManager([])
+    mapping = MagicMock()
+    mapping.entity_column = "DATE_ETA"
+    mapping.column_datatype = "DATE"
+    firebird.operation_matcher.find_best_mapping.return_value = mapping
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    events = [
+        ContainerEvent(date="2024-01-02", operation="Op"),
+        ContainerEvent(date="2024-01-03", operation="Op"),
+    ]
+    tr = TrackingResult(container_number="C1", last_event=events[0], events=events)
+    await engine._write_results_to_firebird([(container, tr)])
+
+    assert container.current_dates["DATE_ETA"] == "2024-01-01"
+    assert firebird.updated == []
+
+
+@pytest.mark.asyncio
+async def test_date_railway_loading_min_date_selected():
+    container = ContainerInfo(id=1, container_number="C1", line_id=1, current_dates={})
+    firebird = DummyFirebirdManager([])
+    mapping = MagicMock()
+    mapping.entity_column = "DATE_RAILWAY_LOADING"
+    mapping.column_datatype = "DATE"
+    firebird.operation_matcher.find_best_mapping.return_value = mapping
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    events = [
+        ContainerEvent(date="2024-02-10", operation="Op"),
+        ContainerEvent(date="2024-01-05", operation="Op"),
+        ContainerEvent(date="2024-01-20", operation="Op"),
+    ]
+    tr = TrackingResult(container_number="C1", last_event=events[0], events=events)
+    await engine._write_results_to_firebird([(container, tr)])
+
+    assert container.current_dates["DATE_RAILWAY_LOADING"] == "2024-01-05"
+    assert firebird.updated == [(1, None)]
+
+
+@pytest.mark.asyncio
+async def test_date_in_remains_two_step_override():
+    container = ContainerInfo(id=1, container_number="C1", line_id=1, current_dates={})
+    firebird = DummyFirebirdManager([])
+    mapping = MagicMock()
+    mapping.entity_column = "DATE_IN"
+    mapping.column_datatype = "TIMESTAMP"
+    firebird.operation_matcher.find_best_mapping.return_value = mapping
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    events = [
+        ContainerEvent(date="2025-08-02 12:00", operation="Регистрация ДО1"),
+        ContainerEvent(date="2025-08-01 10:00", operation="Прием с моря"),
+    ]
+    tr = TrackingResult(container_number="C1", last_event=events[0], events=events)
+    await engine._write_results_to_firebird([(container, tr)])
+
+    assert container.current_dates["DATE_IN"] == "2025-08-02 12:00"
+    assert firebird.updated == [(1, None), (1, None)]
+    assert container.processing_flags["date_in_do1_overridden"] is True
+
+
+@pytest.mark.asyncio
+async def test_tracing_days_unchanged_behavior():
+    container = ContainerInfo(id=1, container_number="C1", line_id=1, current_dates={}, remaining_distance=5)
+    firebird = DummyFirebirdManager([])
+    firebird.operation_matcher.find_best_mapping.return_value = None
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    tr1 = TrackingResult(container_number="C1", last_event=ContainerEvent(date="2024-01-01", operation="Op", remainingDistance="5"))
+    await engine._write_results_to_firebird([(container, tr1)])
+    assert firebird.updated == []
+
+    tr2 = TrackingResult(container_number="C1", last_event=ContainerEvent(date="2024-01-02", operation="Op", remainingDistance="3"))
+    await engine._write_results_to_firebird([(container, tr2)])
+    assert firebird.updated == [(1, '3')]
+    assert container.remaining_distance == 3
+
+
+@pytest.mark.asyncio
+async def test_idempotency_multiple_runs():
+    container = ContainerInfo(id=1, container_number="C1", line_id=1, current_dates={})
+    firebird = DummyFirebirdManager([])
+    mapping = MagicMock()
+    mapping.entity_column = "DATE_ETA"
+    mapping.column_datatype = "DATE"
+    firebird.operation_matcher.find_best_mapping.return_value = mapping
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    events = [ContainerEvent(date="2024-02-01", operation="Op"), ContainerEvent(date="2024-03-01", operation="Op")]
+    tr = TrackingResult(container_number="C1", last_event=events[0], events=events)
+    await engine._write_results_to_firebird([(container, tr)])
+    assert firebird.updated == [(1, None)]
+
+    await engine._write_results_to_firebird([(container, tr)])
+    assert firebird.updated == [(1, None)]
+
+
+@pytest.mark.asyncio
+async def test_timezone_normalization_correct_comparison():
+    container = ContainerInfo(
+        id=1,
+        container_number="C1",
+        line_id=1,
+        current_dates={"DATE_ETA": "2024-01-01T00:00:00+03:00"},
+    )
+    firebird = DummyFirebirdManager([])
+    mapping = MagicMock()
+    mapping.entity_column = "DATE_ETA"
+    mapping.column_datatype = "TIMESTAMP"
+    firebird.operation_matcher.find_best_mapping.return_value = mapping
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    events = [ContainerEvent(date="2023-12-31T21:00:00+00:00", operation="Op")]
+    tr = TrackingResult(container_number="C1", last_event=events[0], events=events)
+    await engine._write_results_to_firebird([(container, tr)])
+
+    assert container.current_dates["DATE_ETA"] == "2024-01-01T00:00:00+03:00"
+    assert firebird.updated == []

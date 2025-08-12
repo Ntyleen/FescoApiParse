@@ -486,7 +486,7 @@ class ContainerTrackingEngine:
                             "date": (last_event.get("date") or "").strip(),
                             "operation": (last_event.get("text") or "").strip(),
                             "location": (last_event.get("location") or "").strip(),
-                            "remainingDistance": (last_event.get("remainingDistance") or "").strip(),
+                            "remainingDistance": str(last_event.get("remainingDistance") or "").strip(),
                         }
         except Exception as e:
             self.logger.debug(f"Ошибка извлечения сводки: {e}")

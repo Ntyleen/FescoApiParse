@@ -17,7 +17,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Any, Set, AsyncGenerator, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime, date, timezone
+from datetime import datetime, date
 from enum import IntEnum
 from contextlib import contextmanager, asynccontextmanager
 import re

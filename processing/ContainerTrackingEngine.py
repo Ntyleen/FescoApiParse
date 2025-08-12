@@ -512,7 +512,7 @@ class ContainerTrackingEngine:
                 "date": (last_event.date or "").strip(),
                 "operation": (last_event.operation or "").strip(),
                 "location": (last_event.location or "").strip(),
-                "remainingDistance": (
+                "remainingDistance": str(
                     getattr(last_event, "remainingDistance", "") or ""
                 ).strip(),
             }

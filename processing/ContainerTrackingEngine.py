@@ -76,7 +76,8 @@ class ContainerTrackingEngine:
     async def run_full_workflow(
         self,
         batch_size: int = 100,
-        target_line_ids: Optional[Set[int]] = None
+        target_line_ids: Optional[Set[int]] = None,
+        target_carrier_ids: Optional[Set[int]] = None
     ) -> EngineStats:
         """
         Запуск полного workflow обработки
@@ -90,6 +91,8 @@ class ContainerTrackingEngine:
         """
         if target_line_ids is None:
             target_line_ids = set(self.config.database.target_line_ids)
+        if target_carrier_ids is None:
+            target_carrier_ids = set(self.config.database.target_railway_carrier_ids)
 
         self.logger.info("🚀 Запуск полного workflow трекинга")
         self.logger.info("="*60)
@@ -110,7 +113,8 @@ class ContainerTrackingEngine:
                 # ИЗМЕНЕНО: Читаем контейнеры напрямую из Firebird
                 async for batch in self.firebird_manager.get_containers_for_processing(
                     batch_size=batch_size,
-                    target_line_ids=target_line_ids
+                    target_line_ids=target_line_ids,
+                    target_carrier_ids=target_carrier_ids
                 ):
                     await self._process_container_batch(session, batch)
                     self.engine_stats.firebird_read_batches += 1
@@ -396,26 +400,49 @@ class ContainerTrackingEngine:
                         )
                         continue
 
-                    if stored_value:
-                        parsed_new = self.firebird_manager.transformer.transform_value(
-                            new_value, mapping.column_datatype
+                    parsed_new = self.firebird_manager.transformer.transform_value(
+                        new_value, mapping.column_datatype
+                    )
+                    if parsed_new is None:
+                        self.logger.debug(
+                            f"⏭️ {container_info.container_number}: unable to parse new value for {mapping.entity_column}"
                         )
-                        parsed_stored = self.firebird_manager.transformer.transform_value(
+                        continue
+
+                    parsed_stored = (
+                        self.firebird_manager.transformer.transform_value(
                             stored_value, mapping.column_datatype
                         )
+                        if stored_value
+                        else None
+                    )
 
-                        if (
-                            parsed_new is not None
-                            and parsed_stored is not None
-                            and parsed_new >= parsed_stored
-                        ):
+                    if mapping.entity_column == self.firebird_manager.entity_config.date_in:
+                        operation_lower = (
+                            tracking_result.last_event.operation or ""
+                        ).lower()
+                        do1_names = ("регистрация до1", "do1 registration")
+                        if container_info.processing_flags.get("date_in_do1") and operation_lower in do1_names:
                             self.logger.debug(
-                                f"⏭️ {container_info.container_number}: existing {mapping.entity_column} {stored_value} is earlier"
+                                f"⏭️ {container_info.container_number}: DATE_IN already set by DO1"
                             )
                             continue
-                        if parsed_new is None:
+                        if parsed_stored is not None:
+                            if operation_lower in do1_names:
+                                if parsed_new <= parsed_stored:
+                                    self.logger.debug(
+                                        f"⏭️ {container_info.container_number}: new DATE_IN {new_value} not after {stored_value}"
+                                    )
+                                    continue
+                            elif parsed_new >= parsed_stored:
+                                self.logger.debug(
+                                    f"⏭️ {container_info.container_number}: existing {mapping.entity_column} {stored_value} is earlier"
+                                )
+                                continue
+                    else:
+                        if parsed_stored is not None and parsed_new >= parsed_stored:
                             self.logger.debug(
-                                f"⏭️ {container_info.container_number}: unable to parse new value for {mapping.entity_column}"
+                                f"⏭️ {container_info.container_number}: existing {mapping.entity_column} {stored_value} is earlier"
                             )
                             continue
                 # КЛЮЧЕВОЕ: Используем container_info.id для обновления записи
@@ -430,6 +457,12 @@ class ContainerTrackingEngine:
                         if tracking_result.last_event
                         else container_info.current_dates.get(mapping.entity_column)
                     )
+                    if mapping.entity_column == self.firebird_manager.entity_config.date_in:
+                        op_lower = (
+                            tracking_result.last_event.operation or ""
+                        ).lower()
+                        if op_lower in ("регистрация до1", "do1 registration"):
+                            container_info.processing_flags["date_in_do1"] = True
 
                 if success and new_remaining is not None:
                     container_info.remaining_distance = new_remaining

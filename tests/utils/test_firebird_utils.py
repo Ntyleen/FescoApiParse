@@ -1,6 +1,8 @@
 import sys
 import os
+import types
 from datetime import datetime, date
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -84,6 +86,19 @@ def test_detect_database_type():
     assert detect_database_type(fb_config) == "firebird"
     assert detect_database_type(mysql_config) == "mysql"
     assert detect_database_type(pg_config) == "postgresql"
+
+
+def test_build_selection_query_or_filter():
+    fm, _ = _import_firebird_modules()
+    cfg = fm.EntityTableConfig()
+    dummy = types.SimpleNamespace(entity_config=cfg, logger=MagicMock())
+    query, params = fm.FirebirdEntityManager._build_selection_query(
+        dummy, {1}, {2}, 0
+    )
+    assert "OR" in query
+    assert cfg.line_column in query
+    assert cfg.railway_carrier_column in query
+    assert params[-2:] == [1, 2]
 
 
 @pytest.mark.asyncio

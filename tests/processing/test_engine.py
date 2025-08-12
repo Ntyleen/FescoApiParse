@@ -43,7 +43,14 @@ class DummyFirebirdManager:
     def __init__(self, containers):
         self.containers = containers
         self.updated = []
-        self.entity_config = MagicMock(date_railway_loading="DATE_RAILWAY_LOADING")
+        self.entity_config = MagicMock(
+            date_railway_loading="DATE_RAILWAY_LOADING",
+            date_in="DATE_IN",
+            remaining_distance="TRACING_DAYS",
+        )
+        self.transformer = MagicMock(
+            transform_value=lambda v, t: int(v) if t == "INTEGER" and v is not None else v
+        )
         mapping = MagicMock()
         mapping.entity_column = "DATE_ETA"
         self.operation_matcher = MagicMock(find_best_mapping=MagicMock(return_value=mapping))
@@ -51,7 +58,7 @@ class DummyFirebirdManager:
     async def test_connection(self):
         return True
 
-    async def get_containers_for_processing(self, batch_size=100, target_line_ids=None):
+    async def get_containers_for_processing(self, batch_size=100, target_line_ids=None, target_carrier_ids=None):
         yield self.containers
 
     async def update_container_from_tracking(self, container_id, tracking_result):
@@ -161,3 +168,154 @@ async def test_skip_container_with_no_order():
     assert stats.containers_loaded == 1
     assert stats.orders_processed == 0
     assert await engine.binding_manager.is_container_no_order("CONT1") is True
+
+
+@pytest.mark.asyncio
+async def test_date_in_override_from_discharge_to_do1():
+    container = ContainerInfo(
+        id=20,
+        container_number="CONT5",
+        line_id=1,
+        current_dates={"DATE_IN": "2024-01-01"},
+    )
+    firebird = DummyFirebirdManager([container])
+    mapping = MagicMock()
+    mapping.entity_column = "DATE_IN"
+    mapping.column_datatype = "TIMESTAMP"
+    firebird.operation_matcher.find_best_mapping.return_value = mapping
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(
+            date="2024-01-02",
+            operation="Регистрация ДО1",
+            location="Test",
+        )
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert firebird.updated == [20]
+
+
+@pytest.mark.asyncio
+async def test_date_in_no_override_after_do1():
+    container = ContainerInfo(
+        id=21,
+        container_number="CONT6",
+        line_id=1,
+        current_dates={"DATE_IN": "2024-01-02"},
+        processing_flags={"date_in_do1": True},
+    )
+    firebird = DummyFirebirdManager([container])
+    mapping = MagicMock()
+    mapping.entity_column = "DATE_IN"
+    mapping.column_datatype = "TIMESTAMP"
+    firebird.operation_matcher.find_best_mapping.return_value = mapping
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(
+            date="2024-01-03",
+            operation="Регистрация ДО1",
+            location="Test",
+        )
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert firebird.updated == []
+
+
+@pytest.mark.asyncio
+async def test_remaining_distance_updates():
+    container = ContainerInfo(
+        id=30,
+        container_number="CONT7",
+        line_id=1,
+        remaining_distance=100,
+        current_dates={},
+    )
+    firebird = DummyFirebirdManager([container])
+    firebird.operation_matcher.find_best_mapping.return_value = None
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(
+            date=None,
+            operation="Some op",
+            location="Test",
+            remainingDistance="150",
+        )
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert firebird.updated == [30]
+
+
+@pytest.mark.asyncio
+async def test_remaining_distance_skips_when_same():
+    container = ContainerInfo(
+        id=31,
+        container_number="CONT8",
+        line_id=1,
+        remaining_distance=100,
+        current_dates={},
+    )
+    firebird = DummyFirebirdManager([container])
+    firebird.operation_matcher.find_best_mapping.return_value = None
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(
+            date=None,
+            operation="Some op",
+            location="Test",
+            remainingDistance="100",
+        )
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert firebird.updated == []

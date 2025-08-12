@@ -169,6 +169,7 @@ class EntityTableConfig:
     container_column: str = "NAME"
     status_column: str = "SP_ENTITY_STATUS_ID"
     line_column: str = "LEGAL_PERSON_LINE_ID"
+    railway_carrier_column: str = "LEGAL_PERSON_RAILWAY_CARRIER_ID"
     
     # Колонки дат
     date_eta: str = "DATE_ETA"
@@ -748,9 +749,10 @@ class FirebirdEntityManager:
     # =========================================================================
     
     async def get_containers_for_processing(
-        self, 
+        self,
         batch_size: int = 100,
-        target_line_ids: Optional[Set[int]] = None,
+        target_ids: Optional[Set[int]] = None,
+        selection_column: Optional[str] = None,
         min_priority: int = 0
     ) -> AsyncGenerator[List[ContainerInfo], None]:
         """
@@ -758,7 +760,8 @@ class FirebirdEntityManager:
         
         Args:
             batch_size: Размер батча для обработки
-            target_line_ids: ID линий для фильтрации (если None - все линии)  
+            target_ids: ID для фильтрации
+            selection_column: колонка для фильтрации
             min_priority: Минимальный приоритет для фильтрации
             
         Yields:
@@ -771,7 +774,7 @@ class FirebirdEntityManager:
                 with self.connection_manager.get_connection() as connection:
                     cursor = connection.cursor()
                     
-                    query, params = self._build_selection_query(target_line_ids, min_priority)
+                    query, params = self._build_selection_query(target_ids, selection_column, min_priority)
                     
                     self.logger.debug(f"🔥 SQL: {query}")
                     self.logger.debug(f"🔥 Params: {params}")
@@ -818,8 +821,9 @@ class FirebirdEntityManager:
                 yield batch
     
     def _build_selection_query(
-        self, 
-        target_line_ids: Optional[Set[int]], 
+        self,
+        target_ids: Optional[Set[int]],
+        selection_column: Optional[str],
         min_priority: int
     ) -> Tuple[str, List[Any]]:
         """Построить SQL запрос для выборки"""
@@ -852,11 +856,12 @@ class FirebirdEntityManager:
             query += f" AND {self.entity_config.status_column} NOT IN ({status_placeholders})"
             params.extend([int(s) for s in self.entity_config.excluded_status_ids])
         
-        # Фильтр по линиям
-        if target_line_ids:
-            line_placeholders = ','.join(['?'] * len(target_line_ids))
-            query += f" AND {self.entity_config.line_column} IN ({line_placeholders})"
-            params.extend(list((target_line_ids)))
+        # Фильтр по переданным ID
+        if target_ids:
+            column = selection_column or self.entity_config.line_column
+            placeholders = ','.join(['?'] * len(target_ids))
+            query += f" AND {column} IN ({placeholders})"
+            params.extend(list(target_ids))
         
         # Фильтр по приоритету
         if min_priority > 0:

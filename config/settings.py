@@ -87,6 +87,7 @@ class FirebirdDatabaseConfig:
     container_column: str = "NAME"
     status_column: str = "SP_ENTITY_STATUS"
     line_column: str = "LEGAL_PERSON_LINE_ID"
+    railway_carrier_column: str = "LEGAL_PERSON_RAILWAY_CARRIER_ID"
     
     # === КОЛОНКИ ДАТ ===
     date_eta: str = "DATE_ETA"
@@ -99,6 +100,7 @@ class FirebirdDatabaseConfig:
     # === НАСТРОЙКИ ОБРАБОТКИ ===
     excluded_status_ids: List[int] = field(default_factory=lambda: [8, 9, 24])  # закрыто, доставлено, отменено
     target_line_ids: List[int] = field(default_factory=lambda: [451, 751])  # Если пусто - все линии
+    target_carrier_ids: Optional[List[int]] = None
     batch_size: int = 100
     max_connections: int = 10
     
@@ -116,6 +118,14 @@ class FirebirdDatabaseConfig:
         else:
             # Одинарное значение (int/str и др.)
             self.target_line_ids = [int(self.target_line_ids)]
+
+        # Приведение target_carrier_ids к List[int]
+        if isinstance(self.target_carrier_ids, list):
+            self.target_carrier_ids = [int(x) for x in self.target_carrier_ids]
+        elif self.target_carrier_ids is None:
+            self.target_carrier_ids = []
+        else:
+            self.target_carrier_ids = [int(self.target_carrier_ids)]
 
         """Валидация Firebird конфигурации"""
         if not self.host:

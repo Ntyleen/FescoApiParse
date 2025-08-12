@@ -76,7 +76,8 @@ class ContainerTrackingEngine:
     async def run_full_workflow(
         self,
         batch_size: int = 100,
-        target_line_ids: Optional[Set[int]] = None
+        target_line_ids: Optional[Set[int]] = None,
+        target_carrier_ids: Optional[Set[int]] = None
     ) -> EngineStats:
         """
         Запуск полного workflow обработки
@@ -84,12 +85,18 @@ class ContainerTrackingEngine:
         Args:
             batch_size: Размер батча для обработки контейнеров
             target_line_ids: ID линий для фильтрации (None = все линии)
+            target_carrier_ids: ID ЖД перевозчиков для фильтрации
             
         Returns:
             Статистика выполнения
         """
         if target_line_ids is None:
             target_line_ids = set(self.config.database.target_line_ids)
+        if target_carrier_ids is None:
+            tc = getattr(self.config.database, "target_carrier_ids", [])
+            target_carrier_ids = set(tc or [])
+
+        processed_container_ids: Set[int] = set()
 
         self.logger.info("🚀 Запуск полного workflow трекинга")
         self.logger.info("="*60)
@@ -107,15 +114,40 @@ class ContainerTrackingEngine:
         try:
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                 
-                # ИЗМЕНЕНО: Читаем контейнеры напрямую из Firebird
+                self.logger.debug("▶️ Start LINE pass")
+                line_selected = 0
                 async for batch in self.firebird_manager.get_containers_for_processing(
                     batch_size=batch_size,
-                    target_line_ids=target_line_ids
+                    target_ids=target_line_ids
                 ):
+                    line_selected += len(batch)
                     await self._process_container_batch(session, batch)
+                    processed_container_ids.update(c.id for c in batch)
                     self.engine_stats.firebird_read_batches += 1
-                
-                # Финальная статистика
+
+                self.logger.debug(f"✅ Finished LINE pass: {line_selected} containers selected")
+
+                if target_carrier_ids:
+                    self.logger.debug("▶️ Start CARRIER pass")
+                    carrier_selected = 0
+                    async for batch in self.firebird_manager.get_containers_for_processing(
+                        batch_size=batch_size,
+                        target_ids=target_carrier_ids,
+                        selection_column=self.firebird_manager.entity_config.railway_carrier_column
+                    ):
+                        carrier_selected += len(batch)
+                        filtered = [c for c in batch if c.id not in processed_container_ids]
+                        dedup = len(batch) - len(filtered)
+                        if dedup:
+                            self.logger.debug(f"🔁 Deduplicated {dedup} containers in carrier pass")
+                        if not filtered:
+                            continue
+                        await self._process_container_batch(session, filtered)
+                        processed_container_ids.update(c.id for c in filtered)
+                        self.engine_stats.firebird_read_batches += 1
+
+                    self.logger.debug(f"✅ Finished CARRIER pass: {carrier_selected} containers selected")
+
                 await self._log_final_statistics()
                 
         except Exception as e:
@@ -389,6 +421,9 @@ class ContainerTrackingEngine:
                         tracking_result.last_event.date if tracking_result.last_event else None
                     )
                     stored_value = container_info.current_dates.get(mapping.entity_column)
+                    event_name = (
+                        tracking_result.last_event.operation if tracking_result.last_event else ""
+                    )
 
                     if new_value is None:
                         self.logger.debug(
@@ -396,26 +431,62 @@ class ContainerTrackingEngine:
                         )
                         continue
 
-                    if stored_value:
-                        parsed_new = self.firebird_manager.transformer.transform_value(
-                            new_value, mapping.column_datatype
+                    parsed_new = self.firebird_manager.transformer.transform_value(
+                        new_value, mapping.column_datatype
+                    )
+                    if parsed_new is None:
+                        self.logger.debug(
+                            f"⏭️ {container_info.container_number}: unable to parse new value for {mapping.entity_column}"
                         )
+                        continue
+
+                    parsed_stored = None
+                    if stored_value:
                         parsed_stored = self.firebird_manager.transformer.transform_value(
                             stored_value, mapping.column_datatype
                         )
 
+                    date_in_column = self.firebird_manager.entity_config.date_in
+                    if mapping.entity_column == date_in_column:
+                        is_do1 = event_name in ["Регистрация ДО1", "DO1 registration"]
+                        do1_overridden = container_info.processing_flags.get(
+                            "date_in_do1_overridden", False
+                        )
+
+                        if do1_overridden and not is_do1:
+                            self.logger.debug(
+                                f"⏭️ {container_info.container_number}: DATE_IN locked after DO1"
+                            )
+                            continue
+
+                        if is_do1:
+                            if do1_overridden:
+                                self.logger.debug(
+                                    f"⏭️ {container_info.container_number}: DATE_IN already overridden by DO1"
+                                )
+                                continue
+                            container_info.processing_flags[
+                                "date_in_do1_overridden"
+                            ] = True
+                            self.logger.debug(
+                                f"♻️ {container_info.container_number}: DATE_IN override by DO1"
+                            )
+                        else:
+                            if (
+                                parsed_stored is not None and parsed_new >= parsed_stored
+                            ):
+                                self.logger.debug(
+                                    f"⏭️ {container_info.container_number}: existing {mapping.entity_column} {stored_value} is earlier"
+                                )
+                                continue
+                    else:
                         if (
-                            parsed_new is not None
+                            stored_value
                             and parsed_stored is not None
                             and parsed_new >= parsed_stored
                         ):
                             self.logger.debug(
                                 f"⏭️ {container_info.container_number}: existing {mapping.entity_column} {stored_value} is earlier"
-                            )
-                            continue
-                        if parsed_new is None:
-                            self.logger.debug(
-                                f"⏭️ {container_info.container_number}: unable to parse new value for {mapping.entity_column}"
                             )
                             continue
                 # КЛЮЧЕВОЕ: Используем container_info.id для обновления записи

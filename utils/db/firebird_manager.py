@@ -169,6 +169,7 @@ class EntityTableConfig:
     container_column: str = "NAME"
     status_column: str = "SP_ENTITY_STATUS_ID"
     line_column: str = "LEGAL_PERSON_LINE_ID"
+    railway_carrier_column: str = "LEGAL_PERSON_RAILWAY_CARRIER_ID"
     
     # Колонки дат
     date_eta: str = "DATE_ETA"
@@ -277,6 +278,7 @@ class ContainerInfo:
     status_id: Optional[int] = None
     status_name: str = ""
     line_id: Optional[int] = None
+    railway_carrier_id: Optional[int] = None
     priority: int = 0
     remaining_distance: Optional[int] = None
     # created_at: Optional[str] = None
@@ -286,7 +288,7 @@ class ContainerInfo:
     current_dates: Dict[str, Optional[str]] = field(default_factory=dict)
     
     # Флаги обработки
-    processing_flags: Dict[str, bool] = field(default_factory=dict)
+    processing_flags: Dict[str, Any] = field(default_factory=dict)
 
 
 # =============================================================================
@@ -751,6 +753,7 @@ class FirebirdEntityManager:
         self, 
         batch_size: int = 100,
         target_line_ids: Optional[Set[int]] = None,
+        target_carrier_ids: Optional[Set[int]] = None,
         min_priority: int = 0
     ) -> AsyncGenerator[List[ContainerInfo], None]:
         """
@@ -758,7 +761,8 @@ class FirebirdEntityManager:
         
         Args:
             batch_size: Размер батча для обработки
-            target_line_ids: ID линий для фильтрации (если None - все линии)  
+            target_line_ids: ID линий для фильтрации (если None - все линии)
+            target_carrier_ids: ID ЖД перевозчиков (OR-фильтр)
             min_priority: Минимальный приоритет для фильтрации
             
         Yields:
@@ -771,7 +775,7 @@ class FirebirdEntityManager:
                 with self.connection_manager.get_connection() as connection:
                     cursor = connection.cursor()
                     
-                    query, params = self._build_selection_query(target_line_ids, min_priority)
+                    query, params = self._build_selection_query(target_line_ids, target_carrier_ids, min_priority)
                     
                     self.logger.debug(f"🔥 SQL: {query}")
                     self.logger.debug(f"🔥 Params: {params}")
@@ -819,7 +823,8 @@ class FirebirdEntityManager:
     
     def _build_selection_query(
         self, 
-        target_line_ids: Optional[Set[int]], 
+        target_line_ids: Optional[Set[int]],
+        target_carrier_ids: Optional[Set[int]],
         min_priority: int
     ) -> Tuple[str, List[Any]]:
         """Построить SQL запрос для выборки"""
@@ -830,6 +835,7 @@ class FirebirdEntityManager:
             self.entity_config.container_column,
             self.entity_config.status_column,
             self.entity_config.line_column,
+            self.entity_config.railway_carrier_column,
             self.entity_config.date_eta,
             self.entity_config.date_etd,
             self.entity_config.date_in,
@@ -852,11 +858,22 @@ class FirebirdEntityManager:
             query += f" AND {self.entity_config.status_column} NOT IN ({status_placeholders})"
             params.extend([int(s) for s in self.entity_config.excluded_status_ids])
         
-        # Фильтр по линиям
-        if target_line_ids:
+        # Фильтр по линиям и ЖД перевозчикам
+        if target_carrier_ids:
+            line_placeholders = ','.join(['?'] * len(target_line_ids)) if target_line_ids else ''
+            carrier_placeholders = ','.join(['?'] * len(target_carrier_ids))
+            clauses = []
+            if target_line_ids:
+                clauses.append(f"{self.entity_config.line_column} IN ({line_placeholders})")
+                params.extend(list(target_line_ids))
+            clauses.append(f"{self.entity_config.railway_carrier_column} IN ({carrier_placeholders})")
+            params.extend(list(target_carrier_ids))
+            query += " AND (" + " OR ".join(clauses) + ")"
+            self.logger.debug("🔍 OR filter active for line or railway carrier")
+        elif target_line_ids:
             line_placeholders = ','.join(['?'] * len(target_line_ids))
             query += f" AND {self.entity_config.line_column} IN ({line_placeholders})"
-            params.extend(list((target_line_ids)))
+            params.extend(list(target_line_ids))
         
         # Фильтр по приоритету
         if min_priority > 0:
@@ -877,13 +894,14 @@ class FirebirdEntityManager:
             status_id=row[2],
             status_name=self._get_status_name(row[2]),
             line_id=row[3],  # LEGAL_PERSON_LINE_ID
-            remaining_distance=int(row[9]) if row[9] is not None else None,
+            railway_carrier_id=row[4],
+            remaining_distance=int(row[10]) if row[10] is not None else None,
             current_dates={
-                self.entity_config.date_eta: str(row[4]) if row[4] else None,
-                self.entity_config.date_etd: str(row[5]) if row[5] else None,
-                self.entity_config.date_in: str(row[6]) if row[6] else None,
-                self.entity_config.date_railway_loading: str(row[7]) if row[7] else None,
-                self.entity_config.date_railway_delivery: str(row[8]) if row[8] else None,
+                self.entity_config.date_eta: str(row[5]) if row[5] else None,
+                self.entity_config.date_etd: str(row[6]) if row[6] else None,
+                self.entity_config.date_in: str(row[7]) if row[7] else None,
+                self.entity_config.date_railway_loading: str(row[8]) if row[8] else None,
+                self.entity_config.date_railway_delivery: str(row[9]) if row[9] else None,
             },
             processing_flags={'loaded_from_firebird': True}
         )

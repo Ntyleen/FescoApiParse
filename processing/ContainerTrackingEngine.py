@@ -76,7 +76,8 @@ class ContainerTrackingEngine:
     async def run_full_workflow(
         self,
         batch_size: int = 100,
-        target_line_ids: Optional[Set[int]] = None
+        target_line_ids: Optional[Set[int]] = None,
+        target_carrier_ids: Optional[Set[int]] = None
     ) -> EngineStats:
         """
         Запуск полного workflow обработки
@@ -84,12 +85,15 @@ class ContainerTrackingEngine:
         Args:
             batch_size: Размер батча для обработки контейнеров
             target_line_ids: ID линий для фильтрации (None = все линии)
+            target_carrier_ids: ID ЖД перевозчиков для фильтрации
             
         Returns:
             Статистика выполнения
         """
         if target_line_ids is None:
             target_line_ids = set(self.config.database.target_line_ids)
+        if target_carrier_ids is None:
+            target_carrier_ids = set(getattr(self.config.database, 'target_carrier_ids', []))
 
         self.logger.info("🚀 Запуск полного workflow трекинга")
         self.logger.info("="*60)
@@ -110,7 +114,8 @@ class ContainerTrackingEngine:
                 # ИЗМЕНЕНО: Читаем контейнеры напрямую из Firebird
                 async for batch in self.firebird_manager.get_containers_for_processing(
                     batch_size=batch_size,
-                    target_line_ids=target_line_ids
+                    target_line_ids=target_line_ids,
+                    target_carrier_ids=target_carrier_ids
                 ):
                     await self._process_container_batch(session, batch)
                     self.engine_stats.firebird_read_batches += 1
@@ -404,7 +409,23 @@ class ContainerTrackingEngine:
                             stored_value, mapping.column_datatype
                         )
 
+                        override_do1 = False
                         if (
+                            mapping.entity_column == self.firebird_manager.entity_config.date_in
+                            and tracking_result.last_event
+                            and tracking_result.last_event.operation in (
+                                "Регистрация ДО1", "DO1 registration"
+                            )
+                            and not container_info.processing_flags.get("date_in_do1_overridden")
+                            and container_info.processing_flags.get("date_in_source")
+                                in (None, "Прием с моря", "Discharged from vessel")
+                        ):
+                            override_do1 = True
+                            self.logger.debug(
+                                f"♻️ {container_info.container_number}: overriding DATE_IN by DO1"
+                            )
+
+                        if not override_do1 and (
                             parsed_new is not None
                             and parsed_stored is not None
                             and parsed_new >= parsed_stored
@@ -430,6 +451,17 @@ class ContainerTrackingEngine:
                         if tracking_result.last_event
                         else container_info.current_dates.get(mapping.entity_column)
                     )
+                    if (
+                        mapping.entity_column == self.firebird_manager.entity_config.date_in
+                        and tracking_result.last_event
+                    ):
+                        container_info.processing_flags["date_in_source"] = (
+                            tracking_result.last_event.operation
+                        )
+                        if tracking_result.last_event.operation in (
+                            "Регистрация ДО1", "DO1 registration"
+                        ):
+                            container_info.processing_flags["date_in_do1_overridden"] = True
 
                 if success and new_remaining is not None:
                     container_info.remaining_distance = new_remaining

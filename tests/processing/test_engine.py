@@ -51,7 +51,7 @@ class DummyFirebirdManager:
     async def test_connection(self):
         return True
 
-    async def get_containers_for_processing(self, batch_size=100, target_line_ids=None):
+    async def get_containers_for_processing(self, batch_size=100, target_line_ids=None, target_carrier_ids=None):
         yield self.containers
 
     async def update_container_from_tracking(self, container_id, tracking_result):
@@ -161,3 +161,145 @@ async def test_skip_container_with_no_order():
     assert stats.containers_loaded == 1
     assert stats.orders_processed == 0
     assert await engine.binding_manager.is_container_no_order("CONT1") is True
+
+
+@pytest.mark.asyncio
+async def test_date_in_override_do1():
+    container = ContainerInfo(
+        id=5,
+        container_number="CONT5",
+        line_id=1,
+        current_dates={"DATE_IN": "2025-08-01 10:00"},
+        processing_flags={"date_in_source": "Прием с моря"},
+    )
+
+    class Do1FirebirdManager(DummyFirebirdManager):
+        def __init__(self):
+            super().__init__([container])
+            mapping = MagicMock()
+            mapping.entity_column = "DATE_IN"
+            mapping.column_datatype = "TIMESTAMP"
+            self.operation_matcher.find_best_mapping.return_value = mapping
+            self.entity_config.date_in = "DATE_IN"
+            self.entity_config.remaining_distance = "TRACING_DAYS"
+            self.transformer = MagicMock(transform_value=lambda v, t: v)
+
+        async def update_container_from_tracking(self, container_id, tracking_result):
+            self.updated.append(container_id)
+            return True
+
+    firebird = Do1FirebirdManager()
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    tr = TrackingResult(container_number="CONT5")
+    tr.last_event = ContainerEvent(
+        date="2025-08-02 12:00",
+        operation="Регистрация ДО1",
+        location="Test",
+    )
+
+    await engine._write_results_to_firebird([(container, tr)])
+
+    assert firebird.updated == [5]
+    assert container.current_dates["DATE_IN"] == "2025-08-02 12:00"
+
+
+@pytest.mark.asyncio
+async def test_date_in_no_override_after_do1():
+    container = ContainerInfo(
+        id=6,
+        container_number="CONT6",
+        line_id=1,
+        current_dates={"DATE_IN": "2025-08-01 10:00"},
+        processing_flags={"date_in_source": "Прием с моря"},
+    )
+
+    class Do1FirebirdManager(DummyFirebirdManager):
+        def __init__(self):
+            super().__init__([container])
+            mapping = MagicMock()
+            mapping.entity_column = "DATE_IN"
+            mapping.column_datatype = "TIMESTAMP"
+            self.operation_matcher.find_best_mapping.return_value = mapping
+            self.entity_config.date_in = "DATE_IN"
+            self.entity_config.remaining_distance = "TRACING_DAYS"
+            self.transformer = MagicMock(transform_value=lambda v, t: v)
+
+        async def update_container_from_tracking(self, container_id, tracking_result):
+            self.updated.append(container_id)
+            return True
+
+    firebird = Do1FirebirdManager()
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    first = TrackingResult(container_number="CONT6")
+    first.last_event = ContainerEvent(
+        date="2025-08-02 12:00",
+        operation="Регистрация ДО1",
+        location="Test",
+    )
+    await engine._write_results_to_firebird([(container, first)])
+
+    second = TrackingResult(container_number="CONT6")
+    second.last_event = ContainerEvent(
+        date="2025-08-04 09:00",
+        operation="Регистрация ДО1",
+        location="Test",
+    )
+    await engine._write_results_to_firebird([(container, second)])
+
+    assert firebird.updated == [6]
+    assert container.current_dates["DATE_IN"] == "2025-08-02 12:00"
+
+
+@pytest.mark.asyncio
+async def test_remaining_distance_updates_only_when_changed():
+    container = ContainerInfo(
+        id=7,
+        container_number="CONT7",
+        line_id=1,
+        current_dates={},
+        remaining_distance=100,
+    )
+
+    class RdFirebirdManager(DummyFirebirdManager):
+        def __init__(self):
+            super().__init__([container])
+            self.operation_matcher.find_best_mapping.return_value = None
+            self.entity_config.remaining_distance = "TRACING_DAYS"
+            self.transformer = MagicMock(transform_value=lambda v, t: v)
+
+        async def update_container_from_tracking(self, container_id, tracking_result):
+            self.updated.append(container_id)
+            container.remaining_distance = tracking_result.last_event.remainingDistance
+            return True
+
+    firebird = RdFirebirdManager()
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    same = TrackingResult(container_number="CONT7")
+    same.last_event = ContainerEvent(
+        date="2024-01-01",
+        operation="X",
+        location="L",
+        remainingDistance=100,
+    )
+    await engine._write_results_to_firebird([(container, same)])
+    assert firebird.updated == []
+
+    changed = TrackingResult(container_number="CONT7")
+    changed.last_event = ContainerEvent(
+        date="2024-01-02",
+        operation="X",
+        location="L",
+        remainingDistance=80,
+    )
+    await engine._write_results_to_firebird([(container, changed)])
+    assert firebird.updated == [7]
+    assert container.remaining_distance == 80

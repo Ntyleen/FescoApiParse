@@ -14,7 +14,7 @@ class ContainerEvent:
     
     def is_empty(self) -> bool:
         """Проверяет, пустое ли событие"""
-        return not any([self.date, self.location, self.operation])
+        return not any([self.date, self.location, self.operation, self.remainingDistance])
     
     def matches(self, other: 'ContainerEvent') -> bool:
         """Проверяет совпадение событий для дедупликации"""

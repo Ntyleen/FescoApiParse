@@ -390,6 +390,57 @@ async def test_remaining_distance_updates_only_on_change_and_is_latest():
 
 
 @pytest.mark.asyncio
+async def test_remaining_distance_zero_cached_and_written():
+    container = ContainerInfo(id=1, container_number="C1", line_id=1, current_dates={}, remaining_distance=5)
+    firebird = DummyFirebirdManager([container])
+    firebird.operation_matcher.find_best_mapping.return_value = None
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(
+        return_value={
+            "data": [
+                {
+                    "containers": [
+                        {
+                            "containerNumber": "C1",
+                            "lastEvent": {
+                                "date": "2024-01-01",
+                                "text": "Op",
+                                "location": "Loc",
+                                "remainingDistance": 0,
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+    )
+
+    async def dummy_process_single_container(self, session, cont, order_id, order_data):
+        return TrackingResult(
+            container_number=cont.container_number,
+            last_event=ContainerEvent(
+                date="2024-01-01",
+                operation="Op",
+                location="Loc",
+                remainingDistance=0,
+            ),
+        )
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert firebird.updated == [(1, 0)]
+    assert container.remaining_distance == 0
+    cached = await cache.get("order_last_check:ORD1")
+    assert cached["C1"]["remainingDistance"] == "0"
+
+
+@pytest.mark.asyncio
 async def test_date_generic_earliest_wins_across_multiple_events():
     container = ContainerInfo(id=1, container_number="C1", line_id=1, current_dates={})
     firebird = DummyFirebirdManager([])

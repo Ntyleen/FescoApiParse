@@ -1007,10 +1007,10 @@ class FirebirdEntityManager:
         else:
             raw_value = getattr(tracking_result.last_event, date_mapping.fesco_field, None)
         
-        if raw_value:
+        if raw_value is not None:
             # 🔧 КЛЮЧЕВОЕ МЕСТО: выбираем трансформацию по типу колонки
             transformed_value = self.transformer.transform_value(
-                raw_value, 
+                raw_value,
                 date_mapping.column_datatype
             )
             

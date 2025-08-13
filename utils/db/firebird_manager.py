@@ -478,11 +478,13 @@ class FirebirdDateTransformer:
     
     def _transform_to_integer(self, value_str: str) -> Optional[int]:
         """Трансформация в INTEGER (извлечение числа)"""
-        if not value_str:
+        if value_str is None or str(value_str).strip() == "":
             return None
-        
+
+        value_str = str(value_str)
+
         # Извлекаем первое число из строки
-        numbers = self._number_pattern.findall(str(value_str))
+        numbers = self._number_pattern.findall(value_str)
         if numbers:
             try:
                 return int(numbers[0])

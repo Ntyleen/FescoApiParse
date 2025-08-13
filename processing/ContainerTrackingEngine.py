@@ -256,14 +256,32 @@ class ContainerTrackingEngine:
             # Проверяем кэш на изменения
             cache_key = f"order_last_check:{order_id}"
             last_check_data = await self.cache.get(cache_key)
-            
+
             # Извлекаем текущие данные для сравнения
             current_order_summary = self._extract_order_summary(order_data, container_numbers)
-            
-            if last_check_data and self._data_unchanged(last_check_data, current_order_summary):
+
+            # Проверяем, есть ли в БД данные с большим remaining_distance
+            force_update = False
+            if last_check_data:
+                for container in containers:
+                    cached_rem = int(
+                        last_check_data.get(container.container_number, {}).get("remainingDistance")
+                        or 0
+                    )
+                    if (
+                        container.remaining_distance is not None
+                        and container.remaining_distance > cached_rem
+                    ):
+                        self.logger.debug(
+                            f"🔁 Force update for order {order_id}: container {container.container_number} has DB remaining distance {container.remaining_distance} > cached {cached_rem}"
+                        )
+                        force_update = True
+                        break
+
+            if last_check_data and self._data_unchanged(last_check_data, current_order_summary) and not force_update:
                 self.logger.debug(f"💾 Данные заявки {order_id} не изменились")
                 self.engine_stats.api_calls_saved += len(containers)
-                
+
                 # Отмечаем заявку как обработанную в сессии
                 self.session_processed_orders.add(order_id)
                 return

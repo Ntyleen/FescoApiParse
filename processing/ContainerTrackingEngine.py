@@ -472,14 +472,26 @@ class ContainerTrackingEngine:
                 new_rem_raw = tracking_result.last_event.remainingDistance if tracking_result.last_event else None
                 if new_rem_raw is not None:
                     new_rem = self.firebird_manager.transformer.transform_value(new_rem_raw, "INTEGER")
-                    if new_rem is not None and (container_info.remaining_distance is None or new_rem != container_info.remaining_distance):
-                        tr = TrackingResult(container_number=tracking_result.container_number, last_event=ContainerEvent(date=None, operation="", remainingDistance=new_rem_raw))
+                    if new_rem is not None and (
+                        container_info.remaining_distance is None
+                        or new_rem < container_info.remaining_distance
+                    ):
+                        tr = TrackingResult(
+                            container_number=tracking_result.container_number,
+                            last_event=ContainerEvent(
+                                date=None,
+                                operation="",
+                                remainingDistance=new_rem_raw,
+                            ),
+                        )
                         if await self.firebird_manager.update_container_from_tracking(container_info.id, tr):
                             container_info.remaining_distance = new_rem
                             written_count += 1
                             self.engine_stats.firebird_updates += 1
                     else:
-                        self.logger.debug(f"⏭️ {container_info.container_number}: remaining distance unchanged")
+                        self.logger.debug(
+                            f"⏭️ {container_info.container_number}: remaining distance {new_rem} not lower than {container_info.remaining_distance}"
+                        )
             except Exception as e:
                 self.logger.error(f"❌ Ошибка записи {tracking_result.container_number}: {e}")
         self.engine_stats.records_written += written_count

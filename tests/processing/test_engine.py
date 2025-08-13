@@ -383,6 +383,11 @@ async def test_remaining_distance_updates_only_on_change_and_is_latest():
     await engine._write_results_to_firebird([(container, tr3)])
     assert firebird.updated == [(1, '3')]
 
+    tr4 = TrackingResult(container_number="C1", last_event=ContainerEvent(date="2024-01-04", operation="Op", remainingDistance="6"))
+    await engine._write_results_to_firebird([(container, tr4)])
+    assert firebird.updated == [(1, '3')]
+    assert container.remaining_distance == 3
+
 
 @pytest.mark.asyncio
 async def test_date_generic_earliest_wins_across_multiple_events():

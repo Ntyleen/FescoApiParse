@@ -512,11 +512,15 @@ class ContainerTrackingEngine:
                     container_num = container.get("containerNumber", "").strip()
                     if container_num in normalized_numbers:
                         last_event = container.get("lastEvent", {})
+                        date = last_event.get("date")
+                        operation = last_event.get("text")
+                        location = last_event.get("location")
+                        remaining = last_event.get("remainingDistance")
                         summary[container_num] = {
-                            "date": (last_event.get("date") or "").strip(),
-                            "operation": (last_event.get("text") or "").strip(),
-                            "location": (last_event.get("location") or "").strip(),
-                            "remainingDistance": str(last_event.get("remainingDistance") or "").strip(),
+                            "date": "" if date is None else str(date).strip(),
+                            "operation": "" if operation is None else str(operation).strip(),
+                            "location": "" if location is None else str(location).strip(),
+                            "remainingDistance": "" if remaining is None else str(remaining).strip(),
                         }
         except Exception as e:
             self.logger.debug(f"Ошибка извлечения сводки: {e}")
@@ -538,13 +542,15 @@ class ContainerTrackingEngine:
             if not result.last_event:
                 continue
             last_event = result.last_event
+            date = last_event.date
+            operation = last_event.operation
+            location = last_event.location
+            remaining = getattr(last_event, "remainingDistance", None)
             event_data = {
-                "date": (last_event.date or "").strip(),
-                "operation": (last_event.operation or "").strip(),
-                "location": (last_event.location or "").strip(),
-                "remainingDistance": str(
-                    getattr(last_event, "remainingDistance", "") or ""
-                ).strip(),
+                "date": "" if date is None else str(date).strip(),
+                "operation": "" if operation is None else str(operation).strip(),
+                "location": "" if location is None else str(location).strip(),
+                "remainingDistance": "" if remaining is None else str(remaining).strip(),
             }
 
             existing = enriched.get(container_num)

@@ -275,8 +275,16 @@ class EventProcessor:
         # Подсчитываем количество заполненных полей
         def count_fields(event: ContainerEvent) -> int:
             filled_fields = 0
-            for field_name in ['date', 'type', 'location', 'operation', 'transport', 'remainingDistance']:
-                if getattr(event, field_name, None):
+            for field_name in [
+                'date',
+                'type',
+                'location',
+                'operation',
+                'transport',
+                'remainingDistance',
+            ]:
+                value = getattr(event, field_name, None)
+                if value is not None and str(value).strip() != "":
                     filled_fields += 1
             return filled_fields
         

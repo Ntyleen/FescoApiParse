@@ -114,3 +114,25 @@ def test_merge_different_events_prefers_container(processor, sample_order_data, 
     assert source == "container"
     assert dedup is False
     assert merged.operation == "Погружен"
+
+
+def test_merge_retains_zero_remaining_distance(processor):
+    order_event = ContainerEvent(
+        date="2024-01-01 10:00:00",
+        location="Vladivostok",
+        operation="Прибыл",
+        remainingDistance="0",
+    )
+
+    container_event = ContainerEvent(
+        date="2024-01-01 10:00:00",
+        location="Vladivostok",
+        operation="Прибыл",
+        type="ARRIVED",
+    )
+
+    merged, dedup, source = processor.merge_and_deduplicate([order_event], [container_event])
+
+    assert source == "merged"
+    assert dedup is True
+    assert merged.remainingDistance == "0"

@@ -136,3 +136,27 @@ def test_merge_retains_zero_remaining_distance(processor):
     assert source == "merged"
     assert dedup is True
     assert merged.remainingDistance == "0"
+
+
+def test_merge_prefers_smaller_remaining_distance(processor):
+    order_event = ContainerEvent(
+        date="2024-01-01 10:00:00",
+        location="Vladivostok",
+        operation="Прибыл",
+        remainingDistance="5",
+    )
+
+    container_event = ContainerEvent(
+        date="2024-01-01 10:00:00",
+        location="Vladivostok",
+        operation="Прибыл",
+        remainingDistance="0",
+    )
+
+    merged, dedup, source = processor.merge_and_deduplicate(
+        [order_event], [container_event]
+    )
+
+    assert source == "merged"
+    assert dedup is True
+    assert merged.remainingDistance == "0"

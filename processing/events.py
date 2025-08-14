@@ -199,9 +199,36 @@ class EventProcessor:
         # Проверяем на дубликаты
         if order_event.matches(container_event):
             self.logger.debug("🔄 Найдены дубликаты событий")
-            
+
             # Выбираем более подробное событие
             chosen_event = self._choose_better_event(order_event, container_event)
+
+            # Если оба события содержат remainingDistance и значения отличаются,
+            # выбираем событие с меньшим расстоянием
+            try:
+                rem_order = (
+                    int(order_event.remainingDistance)
+                    if order_event.remainingDistance is not None
+                    and str(order_event.remainingDistance).strip() != ""
+                    else None
+                )
+                rem_container = (
+                    int(container_event.remainingDistance)
+                    if container_event.remainingDistance is not None
+                    and str(container_event.remainingDistance).strip() != ""
+                    else None
+                )
+            except ValueError:
+                rem_order = rem_container = None
+
+            if (
+                rem_order is not None
+                and rem_container is not None
+                and rem_order != rem_container
+            ):
+                chosen_event = (
+                    order_event if rem_order < rem_container else container_event
+                )
             
             # Логируем выбор
             if chosen_event == container_event:

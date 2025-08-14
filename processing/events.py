@@ -239,8 +239,39 @@ class EventProcessor:
             self.logger.info(f"🔄 Дедупликация: {chosen_event.operation} в {chosen_event.location}")
             return chosen_event, True, "merged"
         
-        # События разные - берем из контейнера (обычно более актуальные)
-        self.logger.debug("🔍 События не совпадают, выбираем container event")
+        # События разные - сравниваем remainingDistance
+        try:
+            rem_order = (
+                int(order_event.remainingDistance)
+                if order_event.remainingDistance is not None
+                and str(order_event.remainingDistance).strip() != ""
+                else None
+            )
+            rem_container = (
+                int(container_event.remainingDistance)
+                if container_event.remainingDistance is not None
+                and str(container_event.remainingDistance).strip() != ""
+                else None
+            )
+        except ValueError:
+            rem_order = rem_container = None
+
+        if rem_order is not None or rem_container is not None:
+            if rem_container is None or (
+                rem_order is not None and rem_order <= rem_container
+            ):
+                self.logger.info("✅ Выбрано order event (по remainingDistance)")
+                return order_event, False, "order"
+            else:
+                self.logger.info(
+                    "✅ Выбрано container event (по remainingDistance)"
+                )
+                return container_event, False, "container"
+
+        # Если расстояние отсутствует в обоих событиях - выбираем container event
+        self.logger.debug(
+            "🔍 События не совпадают и не содержат remainingDistance, выбираем container event"
+        )
         self.logger.info(f"✅ Выбрано container event: {container_event.operation}")
         return container_event, False, "container"
     

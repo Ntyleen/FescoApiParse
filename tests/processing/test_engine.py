@@ -441,6 +441,38 @@ async def test_remaining_distance_zero_cached_and_written():
 
 
 @pytest.mark.asyncio
+async def test_remaining_distance_zero_without_other_fields():
+    container = ContainerInfo(id=1, container_number="C1", line_id=1, current_dates={}, remaining_distance=5)
+    firebird = DummyFirebirdManager([container])
+    firebird.operation_matcher.find_best_mapping.return_value = None
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD1")
+    engine.api_client.get_order_tracking = AsyncMock(
+        return_value={
+            "data": [
+                {
+                    "containers": [
+                        {"containerNumber": "C1", "lastEvent": {}}
+                    ]
+                }
+            ]
+        }
+    )
+    engine.api_client.get_container_tracking = AsyncMock(
+        return_value={"data": [{"remainingDistance": 0}]}
+    )
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert firebird.updated == [(1, 0)]
+    cached = await cache.get("order_last_check:ORD1")
+    assert cached["C1"]["remainingDistance"] == "0"
+
+
+@pytest.mark.asyncio
 async def test_date_generic_earliest_wins_across_multiple_events():
     container = ContainerInfo(id=1, container_number="C1", line_id=1, current_dates={})
     firebird = DummyFirebirdManager([])

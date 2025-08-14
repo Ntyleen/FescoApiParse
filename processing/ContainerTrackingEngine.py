@@ -270,10 +270,10 @@ class ContainerTrackingEngine:
                     )
                     if (
                         container.remaining_distance is not None
-                        and container.remaining_distance > cached_rem
+                        and container.remaining_distance != cached_rem
                     ):
                         self.logger.debug(
-                            f"🔁 Force update for order {order_id}: container {container.container_number} has DB remaining distance {container.remaining_distance} > cached {cached_rem}"
+                            f"🔁 Force update for order {order_id}: container {container.container_number} has DB remaining distance {container.remaining_distance} != cached {cached_rem}"
                         )
                         force_update = True
                         break
@@ -564,7 +564,7 @@ class ContainerTrackingEngine:
                     existing["operation"] = event_data["operation"]
                 if not existing.get("location") and event_data["location"]:
                     existing["location"] = event_data["location"]
-                if not existing.get("remainingDistance") != event_data[
+                if existing.get("remainingDistance") != event_data[
                     "remainingDistance"
                 ]:
                     existing["remainingDistance"] = event_data["remainingDistance"]

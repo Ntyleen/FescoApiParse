@@ -6,6 +6,7 @@ from models.container_event import ContainerEvent
 from datetime import datetime
 
 from utils.db.firebird_manager import FirebirdDateTransformer
+from utils.container_utils import normalize_container_number
 
 from utils.logging import get_logger
 
@@ -45,30 +46,31 @@ class EventProcessor:
         """
         
         self.logger.debug(f"📦 Извлечение order events для {container_number}")
-        
+
         events = []
-        
+        normalized_arg = normalize_container_number(container_number)
+
         try:
             data_items = order_data.get("data", [])
             self.logger.debug(f"📊 Получено {len(data_items)} элементов данных заявки")
-            
+
             for order_item in data_items:
                 # Проверяем соответствие номера заявки
                 item_order_id = str(order_item.get("orderNumber", ""))
                 if item_order_id != str(order_id):
                     self.logger.debug(f"⏭️ Пропускаем заявку {item_order_id} (ищем {order_id})")
                     continue
-                
+
                 # Ищем нужный контейнер
                 containers = order_item.get("containers", [])
                 self.logger.debug(f"🔍 Проверяем {len(containers)} контейнеров в заявке {order_id}")
-                
+
                 for container in containers:
-                    container_num = container.get("containerNumber", "").strip()
-                    if container_num != container_number.strip():
+                    container_num = normalize_container_number(container.get("containerNumber", ""))
+                    if container_num != normalized_arg:
                         self.logger.debug(f"⏭️ Пропускаем контейнер {container_num}")
                         continue
-                    
+
                     # Извлекаем последнее событие
                     last_event = container.get("lastEvent", {})
                     if self._is_valid_event_data(last_event):
@@ -79,15 +81,15 @@ class EventProcessor:
                             remainingDistance=last_event.get("remainingDistance")
                         )
                         events.append(event)
-                        
+
                         self.logger.debug(f"📦 Order event найден: {event.operation} в {event.location}")
                     else:
                         self.logger.debug("⚠️ Последнее событие пустое или невалидное")
-            
+
         except Exception as e:
             self.logger.error(f"❌ Ошибка извлечения order events: {e}")
             self.logger.debug("🔍 Детали ошибки:", exc_info=True)
-        
+
         self.logger.debug(f"✅ Извлечено {len(events)} order events")
         return events
     

@@ -82,6 +82,31 @@ def test_extract_container_events(processor, sample_container_data):
     assert event.transport == "Ship"
 
 
+def test_extract_order_events_normalizes_numbers(processor):
+    order_data = {
+        "data": [
+            {
+                "orderNumber": "ORD123",
+                "containers": [
+                    {
+                        "containerNumber": "co nt1",  # mixed case with spaces
+                        "lastEvent": {
+                            "date": "2024-01-01 10:00:00",
+                            "location": "Vladivostok",
+                            "text": "Прибыл",
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    # incoming container number also contains spaces/case
+    events = processor.extract_order_events(order_data, "ORD123", " C ONT1 ")
+    assert len(events) == 1
+    assert events[0].operation == "Прибыл"
+
+
 def test_merge_only_order_events(processor, sample_order_data):
     order_events = processor.extract_order_events(sample_order_data, "ORD123", "CONT1")
     merged, dedup, source = processor.merge_and_deduplicate(order_events, [])

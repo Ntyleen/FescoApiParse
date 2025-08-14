@@ -13,6 +13,7 @@ from cache.cache_base import CacheBackend
 from api.api_client import FescoApiClient
 from processing.container_bindings import ContainerBindingManager
 from processing.events import EventProcessor
+from utils.container_utils import normalize_container_number
 
 # НОВОЕ: Прямой импорт Firebird компонентов
 from utils.db.firebird_manager import (
@@ -246,7 +247,7 @@ class ContainerTrackingEngine:
         Обработка группы контейнеров одной заявки
         """
         
-        container_numbers = [c.container_number.strip() for c in containers]
+        container_numbers = [normalize_container_number(c.container_number) for c in containers]
         self.logger.info(f"📡 Обработка заявки {order_id}: {len(containers)} контейнеров")
         
         try:
@@ -264,8 +265,9 @@ class ContainerTrackingEngine:
             force_update = False
             if last_check_data:
                 for container in containers:
+                    norm_cn = normalize_container_number(container.container_number)
                     cached_rem = int(
-                        last_check_data.get(container.container_number, {}).get("remainingDistance")
+                        last_check_data.get(norm_cn, {}).get("remainingDistance")
                         or 0
                     )
                     if (
@@ -504,12 +506,14 @@ class ContainerTrackingEngine:
         """Извлечь краткую сводку заявки для проверки изменений"""
         
         summary = {}
-        normalized_numbers = {num.strip() for num in container_numbers}
+        normalized_numbers = {normalize_container_number(num) for num in container_numbers}
 
         try:
             for order_item in order_data.get("data", []):
                 for container in order_item.get("containers", []):
-                    container_num = container.get("containerNumber", "").strip()
+                    container_num = normalize_container_number(
+                        container.get("containerNumber", "")
+                    )
                     if container_num in normalized_numbers:
                         last_event = container.get("lastEvent", {})
                         date = last_event.get("date")
@@ -538,7 +542,9 @@ class ContainerTrackingEngine:
         enriched = {k: v.copy() for k, v in summary.items()}
 
         for container_info, result in container_results:
-            container_num = container_info.container_number.strip()
+            container_num = normalize_container_number(
+                container_info.container_number
+            )
             if not result.last_event:
                 continue
             last_event = result.last_event

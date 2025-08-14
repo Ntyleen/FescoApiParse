@@ -634,3 +634,42 @@ async def test_timezone_normalization_correct_comparison():
 
     assert container.current_dates["DATE_ETA"] == "2024-01-01T00:00:00+03:00"
     assert firebird.updated == []
+
+
+def test_extract_order_summary_normalizes_and_handles_zero():
+    firebird = DummyFirebirdManager([])
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    engine = ContainerTrackingEngine(config, cache, firebird)
+
+    order_data = {
+        "data": [
+            {
+                "orderNumber": "ORD1",
+                "containers": [
+                    {
+                        "containerNumber": "co nt1",
+                        "lastEvent": {
+                            "date": "2024-01-01",
+                            "text": "Load",
+                            "location": "Loc",
+                            "remainingDistance": 0,
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    summary = engine._extract_order_summary(order_data, ["CONT1"])
+    assert summary == {
+        "CONT1": {
+            "date": "2024-01-01",
+            "operation": "Load",
+            "location": "Loc",
+            "remainingDistance": "0",
+        }
+    }
+
+    cached = {"CONT1": summary["CONT1"].copy()}
+    assert engine._data_unchanged(cached, summary)

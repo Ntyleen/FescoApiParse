@@ -318,19 +318,19 @@ class EventProcessor:
             return False
         
         # Проверяем наличие хотя бы одного ключевого поля
-        key_fields = ['date', 'location', 'operation', 'text']
+        key_fields = ['date', 'location', 'operation', 'text', 'remainingDistance']
         valid_fields = []
-        
+
         for field in key_fields:
             value = event_data.get(field)
-            if value and str(value).strip():
+            if value is not None and str(value).strip() != "":
                 valid_fields.append(field)
-        
+
         is_valid = len(valid_fields) > 0
-        
+
         if is_valid:
             self.logger.debug(f"✅ Валидное событие с полями: {valid_fields}")
         else:
             self.logger.debug(f"⚠️ Невалидное событие: отсутствуют ключевые поля {key_fields}")
-        
+
         return is_valid

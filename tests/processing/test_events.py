@@ -82,6 +82,31 @@ def test_extract_container_events(processor, sample_container_data):
     assert event.transport == "Ship"
 
 
+def test_extract_order_events_normalizes_numbers(processor):
+    order_data = {
+        "data": [
+            {
+                "orderNumber": "ORD123",
+                "containers": [
+                    {
+                        "containerNumber": "co nt1",  # mixed case with spaces
+                        "lastEvent": {
+                            "date": "2024-01-01 10:00:00",
+                            "location": "Vladivostok",
+                            "text": "Прибыл",
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    # incoming container number also contains spaces/case
+    events = processor.extract_order_events(order_data, "ORD123", " C ONT1 ")
+    assert len(events) == 1
+    assert events[0].operation == "Прибыл"
+
+
 def test_merge_only_order_events(processor, sample_order_data):
     order_events = processor.extract_order_events(sample_order_data, "ORD123", "CONT1")
     merged, dedup, source = processor.merge_and_deduplicate(order_events, [])
@@ -116,20 +141,71 @@ def test_merge_different_events_prefers_container(processor, sample_order_data, 
     assert merged.operation == "Погружен"
 
 
-def test_remaining_distance_from_order(processor, sample_order_data, different_container_data):
-    """Container event chosen but remaining distance should come from order data"""
-    order_events = processor.extract_order_events(sample_order_data, "ORD123", "CONT1")
-    container_events = processor.extract_container_events(different_container_data)
+def test_merge_retains_zero_remaining_distance(processor):
+    order_event = ContainerEvent(
+        date="2024-01-01 10:00:00",
+        location="Vladivostok",
+        operation="Прибыл",
+        remainingDistance="0",
+    )
 
-    # Sanity check: container event has a different remainingDistance
-    assert container_events[0].remainingDistance == "500"
-    assert order_events[0].remainingDistance == "1000"
+    container_event = ContainerEvent(
+        date="2024-01-01 10:00:00",
+        location="Vladivostok",
+        operation="Прибыл",
+        type="ARRIVED",
+    )
 
-    merged, dedup, source = processor.merge_and_deduplicate(order_events, container_events)
+    merged, dedup, source = processor.merge_and_deduplicate([order_event], [container_event])
 
-    # Container event should be selected due to newer date
-    assert source == "container"
-    assert merged.operation == "Погружен"
+    assert source == "merged"
+    assert dedup is True
+    assert merged.remainingDistance == "0"
 
-    # But remainingDistance must come from order data
-    assert merged.remainingDistance == "1000"
+
+def test_merge_prefers_smaller_remaining_distance(processor):
+    order_event = ContainerEvent(
+        date="2024-01-01 10:00:00",
+        location="Vladivostok",
+        operation="Прибыл",
+        remainingDistance="5",
+    )
+
+    container_event = ContainerEvent(
+        date="2024-01-01 10:00:00",
+        location="Vladivostok",
+        operation="Прибыл",
+        remainingDistance="0",
+    )
+
+    merged, dedup, source = processor.merge_and_deduplicate(
+        [order_event], [container_event]
+    )
+
+    assert source == "merged"
+    assert dedup is True
+    assert merged.remainingDistance == "0"
+
+
+def test_merge_prefers_smaller_remaining_distance_when_events_differ(processor):
+    order_event = ContainerEvent(
+        date="2024-01-01 10:00:00",
+        location="Loc1",
+        operation="Arrived",
+        remainingDistance="0",
+    )
+
+    container_event = ContainerEvent(
+        date="2024-01-02 10:00:00",
+        location="Loc2",
+        operation="Loaded",
+        remainingDistance="27",
+    )
+
+    merged, dedup, source = processor.merge_and_deduplicate(
+        [order_event], [container_event]
+    )
+
+    assert source == "order"
+    assert dedup is False
+    assert merged.remainingDistance == "0"

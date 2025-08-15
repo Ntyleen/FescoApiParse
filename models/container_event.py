@@ -14,7 +14,12 @@ class ContainerEvent:
     
     def is_empty(self) -> bool:
         """Проверяет, пустое ли событие"""
-        return not any([self.date, self.location, self.operation])
+        has_date = bool(self.date and str(self.date).strip())
+        has_location = bool(self.location and str(self.location).strip())
+        has_operation = bool(self.operation and str(self.operation).strip())
+        has_remaining = self.remainingDistance is not None and str(self.remainingDistance).strip() != ""
+
+        return not (has_date or has_location or has_operation or has_remaining)
     
     def matches(self, other: 'ContainerEvent') -> bool:
         """Проверяет совпадение событий для дедупликации"""
@@ -30,6 +35,8 @@ class TrackingResult:
     
     # Основное событие
     last_event: ContainerEvent | None = None
+    # Все события для контейнера (order + container)
+    events: list[ContainerEvent] | None = None
     
     # Метаданные
     events_source: str = "unknown"  # "order", "container", "merged", "no_events"

@@ -37,7 +37,12 @@ class FescoTracker:
         self.config = None
         self.logger = None
         self.stats = ProcessingStats()
-        
+
+    def _setup_run_logging(self) -> None:
+        """Настройка логирования для запуска"""
+        setup_logging_from_config(self.config.logging)
+        self.logger = get_logger("fesco_tracker.main")
+
     async def initialize(self):
         """Инициализация приложения"""
         print(f"🚀 Инициализация FESCO Tracker ({self.environment})...")
@@ -113,6 +118,8 @@ class FescoTracker:
     
     async def run_db_mode(self, batch_size: int = 100):
         """Режим полной обработки из БД"""
+
+        self._setup_run_logging()
         self.logger.info(f"🗄️ Запуск обработки из БД (batch_size={batch_size})") # type: ignore
         
         try:

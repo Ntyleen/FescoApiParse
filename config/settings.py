@@ -88,7 +88,8 @@ class FirebirdDatabaseConfig:
     status_column: str = "SP_ENTITY_STATUS"
     line_column: str = "LEGAL_PERSON_LINE_ID"
     railway_carrier_column: str = "LEGAL_PERSON_RAILWAY_CARRIER_ID"
-    
+    railway_current_station: str = "SP_RAILWAY_CURRENT_STATION_ID"
+
     # === КОЛОНКИ ДАТ ===
     date_eta: str = "DATE_ETA"
     date_etd: str = "DATE_ETD"

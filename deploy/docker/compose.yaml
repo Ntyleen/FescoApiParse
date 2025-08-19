@@ -1,0 +1,30 @@
+services:
+  fesco_cache:
+    image: redis:8.0.3
+    container_name: fesco-cache
+    restart: unless-stopped
+    networks:
+      - fesco-net
+    ports:
+      - "6380:6379"
+    volumes:
+      - fesco-cache:/data/
+    env_file:
+      - .env/redis.env
+
+  fesco_parse:
+    container_name: fesco-parser
+    restart: unless-stopped
+    image: 192.168.140.18:5050/lilg/fescoapiparse/fesco-parser:latest
+    networks:
+      - fesco-net
+    depends_on:
+      - fesco_cache
+    env_file:
+      - .env/production.env
+    volumes:
+      - ./logs:/var/log/FescoApiParser
+volumes:
+  fesco-cache:
+networks:
+  fesco-net:

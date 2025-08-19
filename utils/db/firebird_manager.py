@@ -83,6 +83,10 @@ class EntityStatusID(IntEnum):
     FTL_RELEASE = 58 # "04...Выпуск FTL"
 
     
+    class ENTITY_CURRENT_STATION_ID(IntEnum):
+        
+
+
     @classmethod
     def get_excluded_statuses(cls) -> Set[int]:
         """Статусы, которые исключаем из обработки"""

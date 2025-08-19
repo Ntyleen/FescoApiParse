@@ -10,7 +10,7 @@ __pycache__*
 *.7z
 ### deploy
 !deploy/config/app_global.yaml
-
+!deploy/docker/compose.yaml
 ### Virtual environment\
 .venv/
 .pytest_cache/

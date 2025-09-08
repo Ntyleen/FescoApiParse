@@ -79,7 +79,13 @@ class WorksheetAdapter:
         return dict(zip(headers, values))
 
     def append_row(self, row: SheetRow) -> None:
-        if hasattr(self.worksheet, "append_row"):
+        """Append *row* to the worksheet.
+
+        Fake worksheets used in tests implement ``update_row`` and expect the
+        :class:`SheetRow` instance directly. Real gspread worksheets do not have
+        ``update_row``; they require a list of values and a ``value_input_option``.
+        """
+        if hasattr(self.worksheet, "update_row"):
             self.worksheet.append_row(row)
         else:  # pragma: no cover - real gspread
             self.worksheet.append_row(row.to_list(), value_input_option="USER_ENTERED")

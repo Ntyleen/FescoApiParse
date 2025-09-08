@@ -32,6 +32,18 @@ class FakeWorksheet:
         self.rows[index] = row
 
 
+class StubGspreadWorksheet:
+    """Mimics the minimal gspread interface used by :class:`WorksheetAdapter`."""
+
+    def __init__(self):
+        self.args = None
+        self.kwargs = None
+
+    def append_row(self, *args, **kwargs):  # pragma: no cover - exercised via adapter
+        self.args = args
+        self.kwargs = kwargs
+
+
 def test_map_operation_rules():
     assert GoogleSheetsSync.map_operation(None, 10, False, 0) == "В пути"
     assert GoogleSheetsSync.map_operation("прибыл на станцию назначения", 0, True) == "прибыл на станцию назначения"
@@ -65,3 +77,14 @@ def test_upsert_updates_tracking_date_only_on_distance_change():
     sync.sync_row(data)
     assert sheet.worksheet.rows[0].tracking_date == "09-09-2025"
     assert sheet.worksheet.rows[0].distance == 218.0
+
+
+def test_adapter_converts_row_for_gspread():
+    stub = StubGspreadWorksheet()
+    adapter = WorksheetAdapter(stub)
+    row = SheetRow("C1", "01-01-2024", "02-01-2024", "В пути", 1.0, "Москва")
+
+    adapter.append_row(row)
+
+    assert stub.args[0] == row.to_list()
+    assert stub.kwargs.get("value_input_option") == "USER_ENTERED"

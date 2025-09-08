@@ -13,8 +13,10 @@ from .settings import (
     LoggingConfig,
     OutputConfig,
     ProcessingConfig,
+    SchedulerConfig,
+    GoogleSheetsConfig,
     ConfigError,
-    load_config
+    load_config,
 )
 
 __all__ = [
@@ -26,6 +28,8 @@ __all__ = [
     'LoggingConfig',
     'OutputConfig',
     'ProcessingConfig',
+    'SchedulerConfig',
+    'GoogleSheetsConfig',
     
     # Исключения
     'ConfigError',

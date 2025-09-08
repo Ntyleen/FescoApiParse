@@ -1,5 +1,4 @@
 from datetime import datetime
-from datetime import datetime
 
 from processing.google_sheets_sync import WorksheetAdapter, GoogleSheetsSync, SheetRow
 
@@ -30,6 +29,16 @@ class FakeWorksheet:
 
     def update_row(self, index, row):
         self.rows[index] = row
+
+
+class StubGspreadWorksheet:
+    """Minimal stub mimicking gspread's worksheet interface."""
+
+    def __init__(self):
+        self.appended: list[list[str]] = []
+
+    def append_row(self, values, value_input_option=None):  # pragma: no cover - simple stub
+        self.appended.append(values)
 
 
 def test_map_operation_rules():
@@ -65,3 +74,11 @@ def test_upsert_updates_tracking_date_only_on_distance_change():
     sync.sync_row(data)
     assert sheet.worksheet.rows[0].tracking_date == "09-09-2025"
     assert sheet.worksheet.rows[0].distance == 218.0
+
+
+def test_adapter_passes_list_to_gspread_append_row():
+    stub = StubGspreadWorksheet()
+    adapter = WorksheetAdapter(stub)
+    row = SheetRow("ABC", "01-01-2025", "01-01-2025", "В пути", 0.0, "Москва")
+    adapter.append_row(row)
+    assert stub.appended == [row.to_list()]

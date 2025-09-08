@@ -13,6 +13,7 @@ from typing import Dict, Optional, Callable
 from zoneinfo import ZoneInfo
 
 from utils.logging import get_logger
+from config.settings import GoogleSheetsConfig
 
 try:  # pragma: no cover - optional dependency for real usage
     import gspread  # type: ignore
@@ -79,7 +80,7 @@ class WorksheetAdapter:
         return dict(zip(headers, values))
 
     def append_row(self, row: SheetRow) -> None:
-        if hasattr(self.worksheet, "append_row"):
+        if hasattr(self.worksheet, "update_row"):
             self.worksheet.append_row(row)
         else:  # pragma: no cover - real gspread
             self.worksheet.append_row(row.to_list(), value_input_option="USER_ENTERED")
@@ -186,3 +187,13 @@ class GoogleSheetsSync:
         self.ws.update_row(existing_index, row)
         self.logger.info("Row updated for %s", container)
         return existing_distance != distance
+
+
+def worksheet_from_config(cfg: GoogleSheetsConfig) -> WorksheetAdapter:
+    """Create a :class:`WorksheetAdapter` from configuration."""
+    if gspread is None:
+        raise RuntimeError("gspread is required for Google Sheets synchronisation")
+    client = gspread.service_account(filename=cfg.credentials_file)
+    sheet = client.open_by_key(cfg.sheet_key)
+    ws = sheet.worksheet(cfg.worksheet_name)
+    return WorksheetAdapter(ws)

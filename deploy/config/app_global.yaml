@@ -62,6 +62,14 @@ processing:
   prefer_container_events: true
   enable_retries: true
 
+# Google Sheets synchronisation
+google_sheets:
+  enabled: false
+  credentials_file: "./service_account.json"
+  sheet_key: ""
+  worksheet_name: "Sheet1"
+  cron: "0 * * * *"
+
 BrokerDatabase:
     # === НАСТРОЙКИ ENTITY ТАБЛИЦЫ ===
   table_name: "ENTITY"

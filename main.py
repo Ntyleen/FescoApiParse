@@ -209,6 +209,31 @@ class FescoTracker:
         print("📊 СТАТУС СИСТЕМЫ")
         print("="*60)
         print(json.dumps(stats, indent=2, ensure_ascii=False))
+
+    async def run_google_sheets_sync(self):
+        """Запуск синхронизации с Google Sheets."""
+        if not self.config.google_sheets.enabled:
+            self.logger.info("Google Sheets sync disabled")
+            return
+        try:
+            from processing.google_sheets_sync import (
+                worksheet_from_config,
+                GoogleSheetsSync,
+            )
+
+            adapter = worksheet_from_config(self.config.google_sheets)
+            sync = GoogleSheetsSync(adapter)
+            # Placeholder example; real implementation would load actual data
+            dummy = {
+                "Контейнер": "DUMMY0000001",
+                "Отгрузка на ЖД": "01-01-2025",
+                "Расстояние до станции назначения": 0,
+                "Станция местоположения": "Владивосток",
+            }
+            sync.sync_row(dummy)
+            self.logger.info("Google Sheets sync completed")
+        except Exception as e:
+            self.logger.error(f"Google Sheets sync failed: {e}")
     
     async def _run_simple_tracking(self, containers: List[str]):
         """Простой трекинг для тестирования"""
@@ -442,6 +467,8 @@ async def main():
             batch_size = args.batch_size or app.config.processing.batch_size
             scheduler = FescoScheduler()
             scheduler.add_job(app.run_db_mode, cron=cron, args=[batch_size])
+            if app.config.google_sheets.enabled:
+                scheduler.add_job(app.run_google_sheets_sync, cron=app.config.google_sheets.cron)
             scheduler.start()
             # Run indefinitely
             await asyncio.Event().wait()

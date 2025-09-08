@@ -258,6 +258,21 @@ class SchedulerConfig:
             raise ConfigError("enabled должен быть bool")
 
 
+@dataclass
+class GoogleSheetsConfig:
+    """Configuration for Google Sheets synchronisation"""
+
+    enabled: bool = False
+    credentials_file: str = "./service_account.json"
+    sheet_key: str = ""
+    worksheet_name: str = "Sheet1"
+    cron: str = "0 * * * *"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise ConfigError("enabled должен быть bool")
+
+
 class EnvironmentSubstitutor:
     """
     Отдельный класс для подстановки переменных окружения.
@@ -330,6 +345,7 @@ class Config:
     output: OutputConfig = field(default_factory=OutputConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    google_sheets: GoogleSheetsConfig = field(default_factory=GoogleSheetsConfig)
     database: FirebirdDatabaseConfig = field(default_factory=FirebirdDatabaseConfig)
 
     

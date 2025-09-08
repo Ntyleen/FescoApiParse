@@ -176,10 +176,23 @@ class EventProcessor:
         self.logger.debug("🔀 Объединение событий из двух источников")
         final_event, has_duplicates, source = self._merge_events(order_events, container_events)
 
-        # Используем значение remainingDistance из заявки, если оно есть
+        # Используем значение remainingDistance из заявки,
+        # но только если оно меньше уже выбранного значения
         best_order_event = self._get_best_event(order_events)
         if best_order_event and best_order_event.remainingDistance:
-            final_event.remainingDistance = best_order_event.remainingDistance
+            try:
+                current_rem = (
+                    int(final_event.remainingDistance)
+                    if final_event and final_event.remainingDistance not in (None, "")
+                    else None
+                )
+                order_rem = int(best_order_event.remainingDistance)
+            except ValueError:
+                current_rem = None
+                order_rem = None
+
+            if current_rem is None or (order_rem is not None and order_rem < current_rem):
+                final_event.remainingDistance = best_order_event.remainingDistance
 
         return final_event, has_duplicates, source
     

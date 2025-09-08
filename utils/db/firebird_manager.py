@@ -82,11 +82,6 @@ class EntityStatusID(IntEnum):
     TERMINAL_OPERATION_AUTO = 57 # "ТО (прямое авто)"
     FTL_RELEASE = 58 # "04...Выпуск FTL"
 
-    
-    class ENTITY_CURRENT_STATION_ID(IntEnum):
-        
-
-
     @classmethod
     def get_excluded_statuses(cls) -> Set[int]:
         """Статусы, которые исключаем из обработки"""
@@ -1111,6 +1106,120 @@ class FirebirdEntityManager:
         except Exception as e:
             self.logger.error(f"❌ Ошибка обновления ID {entity_id}: {e}")
             return False
+
+    # ---------------------------------------------------------------------
+    #  Дополнительные методы для работы со станциями
+    # ---------------------------------------------------------------------
+
+    def _sync_get_entity_station_id(self, entity_id: int) -> Optional[int]:
+        with self.connection_manager.get_connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT {self.entity_config.railway_current_station}
+                FROM {self.entity_config.table_name}
+                WHERE {self.entity_config.primary_key} = ?
+                """,
+                [entity_id],
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+    async def get_entity_station_id(self, entity_id: int) -> Optional[int]:
+        """Получить текущий station_id для entity"""
+
+        def _fetch():
+            return self._sync_get_entity_station_id(entity_id)
+
+        try:
+            async with self._get_thread_pool() as pool:
+                loop = asyncio.get_event_loop()
+                return await loop.run_in_executor(pool, _fetch)
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка получения station_id для ID {entity_id}: {e}")
+            return None
+
+    def _sync_update_station_id(self, entity_id: int, station_id: int) -> bool:
+        with self.connection_manager.get_connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE {self.entity_config.table_name}
+                SET {self.entity_config.railway_current_station} = ?
+                WHERE {self.entity_config.primary_key} = ?
+                """,
+                [station_id, entity_id],
+            )
+            connection.commit()
+            return cursor.rowcount > 0
+
+    async def update_entity_station_id(self, entity_id: int, station_id: int) -> bool:
+        """Обновить station_id для entity"""
+
+        def _update():
+            return self._sync_update_station_id(entity_id, station_id)
+
+        try:
+            async with self._get_thread_pool() as pool:
+                loop = asyncio.get_event_loop()
+                return await loop.run_in_executor(pool, _update)
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка обновления station_id для ID {entity_id}: {e}")
+            return False
+
+    def _sync_find_station_by_name(self, name: str) -> List[Tuple[int, str]]:
+        with self.connection_manager.get_connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT ID, NAME FROM SP_RAILWAY_STATION
+                WHERE UPPER(NAME) = ?
+                   OR UPPER(ALIAS) = ?
+                   OR UPPER(SHORT_NAME) = ?
+                """,
+                [name, name, name],
+            )
+            return cursor.fetchall()
+
+    async def find_station_by_name(self, name: str) -> List[Tuple[int, str]]:
+        """Найти станции по нормализованному названию"""
+
+        norm = name.upper().strip()
+
+        def _fetch():
+            return self._sync_find_station_by_name(norm)
+
+        try:
+            async with self._get_thread_pool() as pool:
+                loop = asyncio.get_event_loop()
+                return await loop.run_in_executor(pool, _fetch)
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка поиска станции по имени {name}: {e}")
+            return []
+
+    def _sync_get_station_name(self, station_id: int) -> Optional[str]:
+        with self.connection_manager.get_connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT NAME FROM SP_RAILWAY_STATION WHERE ID = ?",
+                [station_id],
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+    async def get_station_name_by_id(self, station_id: int) -> Optional[str]:
+        """Получить название станции по ID"""
+
+        def _fetch():
+            return self._sync_get_station_name(station_id)
+
+        try:
+            async with self._get_thread_pool() as pool:
+                loop = asyncio.get_event_loop()
+                return await loop.run_in_executor(pool, _fetch)
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка получения названия станции {station_id}: {e}")
+            return None
     
     # =========================================================================
     # УТИЛИТЫ И СТАТИСТИКА

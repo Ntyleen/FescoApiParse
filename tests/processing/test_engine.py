@@ -207,7 +207,7 @@ async def test_update_remaining_distance_when_date_skipped():
 
     await engine.run_full_workflow(batch_size=10)
 
-    assert firebird.updated == [20]
+    assert firebird.updated == [(20, '500')]
 
 @pytest.mark.asyncio
 async def test_skip_container_with_no_order():

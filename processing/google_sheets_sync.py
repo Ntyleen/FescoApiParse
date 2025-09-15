@@ -11,13 +11,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Optional, Callable
 from zoneinfo import ZoneInfo
+import os
 
 from utils.logging import get_logger
+from config.settings import GoogleSheetsConfig
 
 try:  # pragma: no cover - optional dependency for real usage
     import gspread  # type: ignore
+    from google.auth.transport.requests import Request  # type: ignore
+    from google.oauth2.credentials import Credentials  # type: ignore
+    from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore
 except Exception:  # pragma: no cover
     gspread = None  # type: ignore
+    Request = Credentials = InstalledAppFlow = None  # type: ignore
 
 logger = get_logger("google_sheets_sync")
 
@@ -79,17 +85,78 @@ class WorksheetAdapter:
         return dict(zip(headers, values))
 
     def append_row(self, row: SheetRow) -> None:
-        if hasattr(self.worksheet, "append_row"):
-            self.worksheet.append_row(row)
-        else:  # pragma: no cover - real gspread
+        """Append *row* to the worksheet.
+
+        The adapter tries the real gspread API first and falls back to the
+        in-memory interface used in tests when the call fails.
+        """
+
+        try:
             self.worksheet.append_row(row.to_list(), value_input_option="USER_ENTERED")
+        except Exception:  # pragma: no cover - fake worksheet branch
+            self.worksheet.append_row(row)
 
     def update_row(self, index: int, row: SheetRow) -> None:
-        if hasattr(self.worksheet, "update_row"):
-            self.worksheet.update_row(index, row)
-        else:  # pragma: no cover - real gspread
+        """Update the row at *index* with new data."""
+
+        try:
             rng = f"A{index+1}:F{index+1}"
             self.worksheet.batch_update([{ "range": rng, "values": [row.to_list()]}])
+        except Exception:  # pragma: no cover - fake worksheet branch
+            self.worksheet.update_row(index, row)
+
+
+# Default scopes for OAuth2 authentication
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+
+def get_authenticated_worksheet(
+    sheet_id: str,
+    worksheet_name: str,
+    client_secret_file: str,
+    token_file: str = "token.json",
+) -> WorksheetAdapter:
+    """Return an authenticated :class:`WorksheetAdapter` for Google Sheets.
+
+    The function performs the OAuth flow using the provided ``client_secret``
+    file generated in Google Cloud.  Credentials are cached in ``token_file``
+    so the interactive flow is required only once.
+
+    Parameters
+    ----------
+    sheet_id:
+        Identifier of the Google Sheet document.
+    worksheet_name:
+        Name of the worksheet within the document.
+    client_secret_file:
+        Path to the OAuth 2.0 Client ID JSON file downloaded from Google Cloud.
+    token_file:
+        Location where the access/refresh token pair will be stored.  Defaults
+        to ``token.json`` in the current directory.
+    """
+
+    if gspread is None or Credentials is None:
+        raise ImportError("gspread and google-auth libraries are required for OAuth")
+
+    creds: Optional[Credentials] = None
+    if os.path.exists(token_file):
+        creds = Credentials.from_authorized_user_file(token_file, SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(client_secret_file, SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(token_file, "w", encoding="utf-8") as token:
+            token.write(creds.to_json())
+
+    client = gspread.authorize(creds)
+    worksheet = client.open_by_key(sheet_id).worksheet(worksheet_name)
+    return WorksheetAdapter(worksheet)
 
 
 class GoogleSheetsSync:
@@ -186,3 +253,12 @@ class GoogleSheetsSync:
         self.ws.update_row(existing_index, row)
         self.logger.info("Row updated for %s", container)
         return existing_distance != distance
+
+
+def create_sync_from_config(cfg: GoogleSheetsConfig) -> GoogleSheetsSync:
+    """Utility to build :class:`GoogleSheetsSync` from config."""
+
+    worksheet = get_authenticated_worksheet(
+        cfg.sheet_id, cfg.worksheet, cfg.client_secret_file, cfg.token_file
+    )
+    return GoogleSheetsSync(worksheet, timezone=cfg.timezone)

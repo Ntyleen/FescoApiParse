@@ -225,6 +225,45 @@ async def test_final_google_sheet_sync_from_cache():
 
     assert google_sync.sync_row.call_count == len(containers)
 
+
+@pytest.mark.asyncio
+async def test_missing_distance_keeps_existing_sheet_status():
+    containers = [
+        ContainerInfo(id=1, container_number="CONT1", line_id=1, current_dates={}),
+    ]
+    firebird = DummyFirebirdManager(containers)
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    google_sync = DummyGoogleSync([c.container_number for c in containers])
+    # Prepopulate sheet with existing distance and status
+    google_sync.ws.rows[0]["Расстояние до станции назначения"] = 123
+    google_sync.ws.rows[0]["at_destination"] = False
+    engine = ContainerTrackingEngine(config, cache, firebird, google_sync=google_sync)
+
+    order_map = {c.container_number: "ORD1" for c in containers}
+    engine.api_client.find_order_by_container = AsyncMock(side_effect=lambda s, cn: order_map[cn])
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(
+            date="2024-01-01", operation="Load", location="Test", remainingDistance=None
+        )
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    # Existing distance and at_destination should be preserved
+    assert google_sync.sync_row.call_count == 1
+    args, _ = google_sync.sync_row.call_args
+    data = args[0]
+    assert data["Расстояние до станции назначения"] == 123
+    assert data["at_destination"] is False
+
 @pytest.mark.asyncio
 async def test_update_remaining_distance_when_date_skipped():
     container = ContainerInfo(

@@ -1,7 +1,12 @@
 from datetime import datetime
-from datetime import datetime
 
-from processing.google_sheets_sync import WorksheetAdapter, GoogleSheetsSync, SheetRow
+from processing.google_sheets_sync import (
+    WorksheetAdapter,
+    GoogleSheetsSync,
+    SheetRow,
+    create_sync_from_config,
+)
+from config.settings import GoogleSheetsConfig
 
 
 class FakeWorksheet:
@@ -30,6 +35,26 @@ class FakeWorksheet:
 
     def update_row(self, index, row):
         self.rows[index] = row
+
+
+class GspreadLikeWorksheet:
+    """Minimal gspread-like worksheet for adapter tests."""
+
+    def __init__(self):
+        self.appended = []
+        self.updated = []
+
+    def find(self, _):  # pragma: no cover - not used in test
+        raise NotImplementedError
+
+    def row_values(self, row_number):
+        return ["A", "B", "C", "D", "E", "F"]
+
+    def append_row(self, values, value_input_option=None):
+        self.appended.append((values, value_input_option))
+
+    def batch_update(self, data):
+        self.updated.append(data)
 
 
 def test_map_operation_rules():
@@ -65,3 +90,38 @@ def test_upsert_updates_tracking_date_only_on_distance_change():
     sync.sync_row(data)
     assert sheet.worksheet.rows[0].tracking_date == "09-09-2025"
     assert sheet.worksheet.rows[0].distance == 218.0
+
+
+def test_adapter_with_gspread_like_object():
+    ws = WorksheetAdapter(GspreadLikeWorksheet())
+    row = SheetRow("C1", "01-09-2025", "02-09-2025", "В пути", 10.0, "Station")
+
+    ws.append_row(row)
+    assert ws.worksheet.appended[0][0] == row.to_list()
+    assert ws.worksheet.appended[0][1] == "USER_ENTERED"
+
+    ws.update_row(0, row)
+    update = ws.worksheet.updated[0][0]
+    assert update["range"] == "A1:F1"
+    assert update["values"][0] == row.to_list()
+
+
+def test_create_sync_from_config(monkeypatch):
+    cfg = GoogleSheetsConfig(
+        sheet_id="ID1", worksheet="Лист1", client_secret_file="secret.json"
+    )
+    fake_ws = WorksheetAdapter(FakeWorksheet())
+
+    def fake_auth(sheet_id, worksheet_name, client_secret_file, token_file="token.json"):
+        assert sheet_id == "ID1"
+        assert worksheet_name == "Лист1"
+        assert client_secret_file == "secret.json"
+        assert token_file == "token.json"
+        return fake_ws
+
+    monkeypatch.setattr(
+        "processing.google_sheets_sync.get_authenticated_worksheet", fake_auth
+    )
+    sync = create_sync_from_config(cfg)
+    assert isinstance(sync, GoogleSheetsSync)
+    assert sync.ws is fake_ws

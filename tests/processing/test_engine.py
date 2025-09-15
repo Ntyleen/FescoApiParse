@@ -262,7 +262,9 @@ async def test_update_remaining_distance_when_date_skipped():
 
     await engine.run_full_workflow(batch_size=10)
 
+
     assert firebird.updated == [(20, '500')]
+
 
 @pytest.mark.asyncio
 async def test_skip_container_with_no_order():
@@ -281,6 +283,54 @@ async def test_skip_container_with_no_order():
     assert stats.containers_loaded == 1
     assert stats.orders_processed == 0
     assert await engine.binding_manager.is_container_no_order("CONT1") is True
+
+
+class DummyGoogleSync:
+    def __init__(self):
+        self.calls = []
+
+    def sync_row(self, data, stagnant_days: int = 0):
+        self.calls.append((data, stagnant_days))
+
+
+@pytest.mark.asyncio
+async def test_engine_syncs_to_google_sheet():
+    container = ContainerInfo(
+        id=99,
+        container_number="CONT9",
+        line_id=1,
+        current_dates={"DATE_RAILWAY_LOADING": "2024-01-01"},
+    )
+    firebird = DummyFirebirdManager([container])
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    gs = DummyGoogleSync()
+    engine = ContainerTrackingEngine(config, cache, firebird, google_sync=gs)
+
+    engine.api_client.find_order_by_container = AsyncMock(return_value="ORD9")
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(
+            date="2024-02-01",
+            operation="В пути",
+            location="Москва",
+            remainingDistance="100",
+        )
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert gs.calls
+    data, _ = gs.calls[0]
+    assert data["Контейнер"] == "CONT9"
+    assert data["Расстояние до станции назначения"] == 100.0
+    assert data["Станция местоположения"] == "Москва"
 
 
 class TwoPassFirebirdManager:

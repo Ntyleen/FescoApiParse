@@ -26,6 +26,7 @@ from utils.db.firebird_manager import (
 from models.container_event import TrackingResult, ContainerEvent
 from models.processing_stats import ProcessingStats
 from utils.logging import get_logger
+from processing.google_sheets_sync import GoogleSheetsSync
 
 
 @dataclass
@@ -56,7 +57,9 @@ class ContainerTrackingEngine:
         config: Config,
         cache: CacheBackend,
         firebird_manager: FirebirdEntityManager,  # ИЗМЕНЕНО: Один менеджер вместо двух
+
         google_sync: Optional["GoogleSheetsSync"] = None,
+
     ):
         self.config = config
         self.cache = cache
@@ -497,6 +500,32 @@ class ContainerTrackingEngine:
                     else:
                         self.logger.debug(
                             f"⏭️ {container_info.container_number}: remaining distance {new_rem} not lower than {container_info.remaining_distance}"
+                        )
+                if self.google_sync:
+                    distance = new_rem_raw if new_rem_raw is not None else container_info.remaining_distance
+                    try:
+                        distance_val = float(distance) if distance is not None else 0.0
+                    except (TypeError, ValueError):
+                        distance_val = 0.0
+                    row_data = {
+                        "Контейнер": container_info.container_number,
+                        "Отгрузка на ЖД": container_info.current_dates.get(
+                            self.firebird_manager.entity_config.date_railway_loading, ""
+                        ),
+                        "Расстояние до станции назначения": distance_val,
+                        "Станция местоположения": getattr(tracking_result.last_event, "location", "")
+                        if tracking_result.last_event
+                        else "",
+                        "Операция": getattr(tracking_result.last_event, "operation", None)
+                        if tracking_result.last_event
+                        else None,
+                        "at_destination": distance_val == 0,
+                    }
+                    try:
+                        self.google_sync.sync_row(row_data)
+                    except Exception as gs_err:
+                        self.logger.error(
+                            f"❌ Ошибка синхронизации Google Sheets для {container_info.container_number}: {gs_err}"
                         )
             except Exception as e:
                 self.logger.error(f"❌ Ошибка записи {tracking_result.container_number}: {e}")

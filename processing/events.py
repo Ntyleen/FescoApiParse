@@ -192,6 +192,7 @@ class EventProcessor:
             if rem_final is None or (
                 rem_order is not None and rem_order < rem_final
             ):
+
                 final_event.remainingDistance = best_order_event.remainingDistance
 
         return final_event, has_duplicates, source

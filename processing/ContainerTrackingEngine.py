@@ -562,24 +562,48 @@ class ContainerTrackingEngine:
                 if row_idx is not None
                 else {}
             )
-            rem_raw = container_data.get("remainingDistance") or "0"
-            try:
-                distance = float(rem_raw)
-            except Exception:
-                distance = 0.0
+            rem_raw = container_data.get("remainingDistance")
+            distance: Optional[float] = None
+            if rem_raw not in (None, ""):
+                try:
+                    distance = float(rem_raw)
+                except Exception:
+                    self.logger.debug(
+                        f"Невалидное значение remainingDistance '{rem_raw}' для {container}"
+                    )
+            if distance is None:
+                if not existing:
+                    # Не создавать новую строку с неизвестным расстоянием
+                    continue
+                try:
+                    distance_val = float(
+                        existing.get("Расстояние до станции назначения", 0)
+                    )
+                except Exception:
+                    distance_val = 0.0
+                at_destination_raw = existing.get("at_destination")
+                if at_destination_raw in (None, ""):
+                    at_destination = distance_val == 0
+                else:
+                    at_destination = bool(at_destination_raw)
+            else:
+                distance_val = distance
+                at_destination = distance == 0
             data = {
                 "Контейнер": container,
                 "Отгрузка на ЖД": existing.get("Отгрузка на ЖД", ""),
                 "Дата обновления слежения": container_data.get("date", ""),
                 "Операция": container_data.get("operation", ""),
-                "Расстояние до станции назначения": distance,
+                "Расстояние до станции назначения": distance_val,
                 "Станция местоположения": container_data.get("location", ""),
-                "at_destination": distance == 0,
+                "at_destination": at_destination,
             }
             try:
                 self.google_sync.sync_row(data)
             except Exception as e:
-                self.logger.error(f"❌ Ошибка синхронизации контейнера {container}: {e}")
+                self.logger.error(
+                    f"❌ Ошибка синхронизации контейнера {container}: {e}"
+                )
 
     def _extract_order_summary(self, order_data: dict, container_numbers: List[str]) -> dict:
         """Извлечь краткую сводку заявки для проверки изменений"""

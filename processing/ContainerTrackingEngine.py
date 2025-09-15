@@ -552,7 +552,11 @@ class ContainerTrackingEngine:
                     )
                 except Exception:
                     distance_val = 0.0
-                at_destination = bool(existing.get("at_destination", False))
+                at_destination_raw = existing.get("at_destination")
+                if at_destination_raw in (None, ""):
+                    at_destination = distance_val == 0
+                else:
+                    at_destination = bool(at_destination_raw)
             else:
                 distance_val = distance
                 at_destination = distance == 0

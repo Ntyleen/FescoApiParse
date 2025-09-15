@@ -78,6 +78,14 @@ class WorksheetAdapter:
         ]
         return dict(zip(headers, values))
 
+    def list_containers(self) -> list[str]:
+        if hasattr(self.worksheet, "list_containers"):
+            return self.worksheet.list_containers()
+        try:  # pragma: no cover - real gspread
+            return self.worksheet.col_values(1)
+        except Exception:
+            return []
+
     def append_row(self, row: SheetRow) -> None:
         if hasattr(self.worksheet, "append_row"):
             self.worksheet.append_row(row)

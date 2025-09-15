@@ -55,11 +55,13 @@ class ContainerTrackingEngine:
         self,
         config: Config,
         cache: CacheBackend,
-        firebird_manager: FirebirdEntityManager  # ИЗМЕНЕНО: Один менеджер вместо двух
+        firebird_manager: FirebirdEntityManager,  # ИЗМЕНЕНО: Один менеджер вместо двух
+        google_sync: Optional["GoogleSheetsSync"] = None,
     ):
         self.config = config
         self.cache = cache
         self.firebird_manager = firebird_manager  # НОВОЕ: Единый менеджер БД
+        self.google_sync = google_sync
         
         # Инициализируем компоненты
         self.stats = ProcessingStats()
@@ -150,7 +152,9 @@ class ContainerTrackingEngine:
                     self.logger.debug(f"✅ Finished CARRIER pass: {carrier_selected} containers selected")
 
                 await self._log_final_statistics()
-                
+                if self.google_sync:
+                    await self._sync_google_sheet_from_cache()
+
         except Exception as e:
             self.logger.error(f"❌ Критическая ошибка в workflow: {e}")
             raise
@@ -501,7 +505,53 @@ class ContainerTrackingEngine:
 
 
 
-    
+
+    async def _sync_google_sheet_from_cache(self) -> None:
+        containers = []
+        try:
+            containers = self.google_sync.ws.list_containers()
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка чтения контейнеров из Google Sheets: {e}")
+            return
+        for container in containers:
+            if not container or container == "Контейнер":
+                continue
+            order_id = await self.binding_manager.get_container_order(container)
+            if not order_id:
+                continue
+            cache_key = f"order_last_check:{order_id}"
+            order_summary = await self.cache.get(cache_key)
+            if not order_summary:
+                continue
+            norm_cn = normalize_container_number(container)
+            container_data = order_summary.get(norm_cn)
+            if not container_data:
+                continue
+            row_idx = self.google_sync.ws.find_row(container)
+            existing = (
+                self.google_sync.ws.get_row(row_idx)
+                if row_idx is not None
+                else {}
+            )
+            rem_raw = container_data.get("remainingDistance") or "0"
+            try:
+                distance = float(rem_raw)
+            except Exception:
+                distance = 0.0
+            data = {
+                "Контейнер": container,
+                "Отгрузка на ЖД": existing.get("Отгрузка на ЖД", ""),
+                "Дата обновления слежения": container_data.get("date", ""),
+                "Операция": container_data.get("operation", ""),
+                "Расстояние до станции назначения": distance,
+                "Станция местоположения": container_data.get("location", ""),
+                "at_destination": distance == 0,
+            }
+            try:
+                self.google_sync.sync_row(data)
+            except Exception as e:
+                self.logger.error(f"❌ Ошибка синхронизации контейнера {container}: {e}")
+
     def _extract_order_summary(self, order_data: dict, container_numbers: List[str]) -> dict:
         """Извлечь краткую сводку заявки для проверки изменений"""
         

@@ -232,6 +232,23 @@ class OutputConfig:
 
 
 @dataclass
+class GoogleSheetsConfig:
+    """Конфигурация интеграции с Google Sheets"""
+
+    sheet_id: str = ""
+    worksheet: str = "Sheet1"
+    client_secret_file: str = ""
+    token_file: str = "token.json"
+    timezone: str = "Asia/Vladivostok"
+
+    def __post_init__(self):
+        if not isinstance(self.sheet_id, str):
+            raise ConfigError("sheet_id должен быть строкой")
+        if not isinstance(self.worksheet, str):
+            raise ConfigError("worksheet должен быть строкой")
+
+
+@dataclass
 class ProcessingConfig:
     """Конфигурация обработки контейнеров"""
     batch_size: int = 50
@@ -328,6 +345,7 @@ class Config:
     cache: CacheConfig = field(default_factory=CacheConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    google_sheets: GoogleSheetsConfig = field(default_factory=GoogleSheetsConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     database: FirebirdDatabaseConfig = field(default_factory=FirebirdDatabaseConfig)
@@ -471,10 +489,11 @@ class Config:
         # БД конфигурации
         database_dict = config_dict.get("BrokerDatabase", {})
         database_config = FirebirdDatabaseConfig(**database_dict)
-        
+
         # Остальные конфигурации
         logging_config = LoggingConfig(**config_dict.get("logging", {}))
         output_config = OutputConfig(**config_dict.get("output", {}))
+        google_sheets_config = GoogleSheetsConfig(**config_dict.get("google_sheets", {}))
         processing_config = ProcessingConfig(**config_dict.get("processing", {}))
         scheduler_config = SchedulerConfig(**config_dict.get("scheduler", {}))
 
@@ -483,6 +502,7 @@ class Config:
             cache=cache_config,
             logging=logging_config,
             output=output_config,
+            google_sheets=google_sheets_config,
             processing=processing_config,
             scheduler=scheduler_config,
             database=database_config,

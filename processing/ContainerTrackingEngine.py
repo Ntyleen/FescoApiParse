@@ -568,11 +568,9 @@ class ContainerTrackingEngine:
             if not container_data:
                 continue
             row_idx = self.google_sync.ws.find_row(container)
-            existing = (
-                self.google_sync.ws.get_row(row_idx)
-                if row_idx is not None
-                else {}
-            )
+            if row_idx is None:
+                continue
+            existing = self.google_sync.ws.get_row(row_idx) or {}
             rem_raw = container_data.get("remainingDistance")
             distance: Optional[float] = None
             if rem_raw not in (None, ""):

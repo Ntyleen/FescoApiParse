@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from processing.google_sheets_sync import (
     WorksheetAdapter,
     GoogleSheetsSync,
@@ -65,7 +67,8 @@ def test_map_operation_rules():
     assert GoogleSheetsSync.map_operation("Отгружен", 5, False, 0) == "Отгружен"
 
 
-def test_upsert_updates_tracking_date_only_on_distance_change():
+@pytest.mark.asyncio
+async def test_upsert_updates_tracking_date_only_on_distance_change():
     sheet = WorksheetAdapter(FakeWorksheet())
     fixed_now = lambda: datetime(2025, 9, 8, 10, 0, 0)
     sync = GoogleSheetsSync(sheet, now_func=fixed_now)
@@ -77,20 +80,20 @@ def test_upsert_updates_tracking_date_only_on_distance_change():
         "Станция местоположения": "Москва",
         "Операция": "В пути",
     }
-    sync.sync_row(data)
+    await sync.sync_row(data)
     assert len(sheet.worksheet.rows) == 1
     first_date = sheet.worksheet.rows[0].tracking_date
     assert sheet.worksheet.rows[0].operation == "Отгружен"
 
     # Second call with same distance -> date not changed
-    sync.sync_row(data)
+    await sync.sync_row(data)
     assert sheet.worksheet.rows[0].tracking_date == first_date
     assert sheet.worksheet.rows[0].operation == "В пути"
 
     # Third call with changed distance -> date updated
     sync.now_func = lambda: datetime(2025, 9, 9, 10, 0, 0)
     data["Расстояние до станции назначения"] = 218.0
-    sync.sync_row(data)
+    await sync.sync_row(data)
     assert sheet.worksheet.rows[0].tracking_date == "09-09-2025"
     assert sheet.worksheet.rows[0].distance == 218.0
     assert sheet.worksheet.rows[0].operation == "В пути"

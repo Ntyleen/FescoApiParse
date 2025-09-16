@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Optional, Callable
 from zoneinfo import ZoneInfo
+import asyncio
 import os
 
 from utils.logging import get_logger
@@ -209,7 +210,13 @@ class GoogleSheetsSync:
         return "В пути"
 
     # ------------------------------------------------------------------
-    def sync_row(self, data: Dict[str, object], stagnant_days: int = 0) -> bool:
+    async def sync_row(self, data: Dict[str, object], stagnant_days: int = 0) -> bool:
+        """Asynchronously upsert a single row in the worksheet."""
+
+        return await asyncio.to_thread(self._sync_row, data, stagnant_days)
+
+    # ------------------------------------------------------------------
+    def _sync_row(self, data: Dict[str, object], stagnant_days: int = 0) -> bool:
         """Upsert a single row in the worksheet.
 
         Parameters
@@ -237,7 +244,9 @@ class GoogleSheetsSync:
         today = self.now_func().strftime("%d-%m-%Y")
 
         if existing_index is None:
-            row = SheetRow(container, loading_date, today, operation, distance, station_name)
+            row = SheetRow(
+                container, loading_date, today, operation, distance, station_name
+            )
             self.ws.append_row(row)
             self.logger.info("Row added for %s", container)
             return True

@@ -42,6 +42,8 @@ class EngineStats:
     # НОВОЕ: Firebird специфичные метрики
     firebird_updates: int = 0
     firebird_read_batches: int = 0
+    # НОВОЕ: Метрики синхронизации Google Sheets
+    google_rows_updated: int = 0
 
 
 class ContainerTrackingEngine:
@@ -525,7 +527,13 @@ class ContainerTrackingEngine:
                         else None,
                     }
                     try:
-                        await self.google_sync.sync_row(row_data)
+                        row_updated = await self.google_sync.sync_row(row_data)
+                        if row_updated:
+                            self.engine_stats.google_rows_updated += 1
+                        else:
+                            self.logger.debug(
+                                f"📝 Google Sheets без изменений для {container_info.container_number}"
+                            )
                     except Exception as gs_err:
                         self.logger.error(
                             f"❌ Ошибка синхронизации Google Sheets для {container_info.container_number}: {gs_err}"
@@ -702,6 +710,10 @@ class ContainerTrackingEngine:
         self.logger.info(f"⚡ API запросов сэкономлено:   {self.engine_stats.api_calls_saved:,}")
         self.logger.info(f"🔥 Обновлений Firebird:       {self.engine_stats.firebird_updates:,}")
         self.logger.info(f"📊 Батчей прочитано:          {self.engine_stats.firebird_read_batches:,}")
+        if self.google_sync:
+            self.logger.info(
+                f"📝 Обновлений Google Sheets:    {self.engine_stats.google_rows_updated:,}"
+            )
         
         # Расчет эффективности
         if self.engine_stats.containers_loaded > 0:

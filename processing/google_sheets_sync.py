@@ -200,7 +200,7 @@ class GoogleSheetsSync:
             if key in allowed:
                 return allowed[key]
 
-        if at_destination and distance == 0:
+        if at_destination or distance == 0:
             return "прибыл на станцию назначения"
         if stagnant_days >= 1:
             return "простой в пути"

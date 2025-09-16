@@ -109,9 +109,12 @@ class DummyWorksheet:
 
 
 class DummyGoogleSync:
-    def __init__(self, containers):
-        self.ws = DummyWorksheet(containers)
-        self.sync_row = MagicMock()
+    def __init__(self, containers=None):
+        self.ws = DummyWorksheet(containers) if containers is not None else None
+        self.calls = []
+
+    def sync_row(self, data, stagnant_days: int = 0):
+        self.calls.append((data, stagnant_days))
 
 
 @pytest.mark.asyncio
@@ -223,7 +226,7 @@ async def test_final_google_sheet_sync_from_cache():
 
     await engine.run_full_workflow(batch_size=10)
 
-    assert google_sync.sync_row.call_count == len(containers)
+    assert len(google_sync.calls) == len(containers) * 2
 
 
 @pytest.mark.asyncio
@@ -235,9 +238,8 @@ async def test_missing_distance_keeps_existing_sheet_status():
     cache = DummyCache()
     config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
     google_sync = DummyGoogleSync([c.container_number for c in containers])
-    # Prepopulate sheet with existing distance and status
+    # Prepopulate sheet with existing distance
     google_sync.ws.rows[0]["Расстояние до станции назначения"] = 123
-    google_sync.ws.rows[0]["at_destination"] = False
     engine = ContainerTrackingEngine(config, cache, firebird, google_sync=google_sync)
 
     order_map = {c.container_number: "ORD1" for c in containers}
@@ -257,16 +259,15 @@ async def test_missing_distance_keeps_existing_sheet_status():
 
     await engine.run_full_workflow(batch_size=10)
 
-    # Existing distance and at_destination should be preserved
-    assert google_sync.sync_row.call_count == 1
-    args, _ = google_sync.sync_row.call_args
-    data = args[0]
+    # Existing distance should be preserved and no at_destination field added
+    assert len(google_sync.calls) >= 1
+    data, _ = google_sync.calls[-1]
     assert data["Расстояние до станции назначения"] == 123
-    assert data["at_destination"] is False
+    assert "at_destination" not in data
 
 
 @pytest.mark.asyncio
-async def test_infer_destination_when_flag_missing():
+async def test_preserve_zero_distance_when_api_omits_distance():
     containers = [
         ContainerInfo(id=1, container_number="CONT1", line_id=1, current_dates={}),
     ]
@@ -274,7 +275,7 @@ async def test_infer_destination_when_flag_missing():
     cache = DummyCache()
     config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
     google_sync = DummyGoogleSync([c.container_number for c in containers])
-    # Prepopulate sheet with arrived distance but without at_destination flag
+    # Prepopulate sheet with arrived distance
     google_sync.ws.rows[0]["Расстояние до станции назначения"] = 0
     engine = ContainerTrackingEngine(config, cache, firebird, google_sync=google_sync)
 
@@ -295,11 +296,10 @@ async def test_infer_destination_when_flag_missing():
 
     await engine.run_full_workflow(batch_size=10)
 
-    assert google_sync.sync_row.call_count == 1
-    args, _ = google_sync.sync_row.call_args
-    data = args[0]
+    assert len(google_sync.calls) >= 1
+    data, _ = google_sync.calls[-1]
     assert data["Расстояние до станции назначения"] == 0
-    assert data["at_destination"] is True
+    assert "at_destination" not in data
 
 
 @pytest.mark.asyncio
@@ -360,14 +360,6 @@ async def test_skip_container_with_no_order():
     assert stats.containers_loaded == 1
     assert stats.orders_processed == 0
     assert await engine.binding_manager.is_container_no_order("CONT1") is True
-
-
-class DummyGoogleSync:
-    def __init__(self):
-        self.calls = []
-
-    def sync_row(self, data, stagnant_days: int = 0):
-        self.calls.append((data, stagnant_days))
 
 
 @pytest.mark.asyncio

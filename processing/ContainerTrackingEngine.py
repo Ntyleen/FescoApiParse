@@ -519,7 +519,6 @@ class ContainerTrackingEngine:
                         "Операция": getattr(tracking_result.last_event, "operation", None)
                         if tracking_result.last_event
                         else None,
-                        "at_destination": distance_val == 0,
                     }
                     try:
                         self.google_sync.sync_row(row_data)
@@ -581,22 +580,17 @@ class ContainerTrackingEngine:
                     )
                 except Exception:
                     distance_val = 0.0
-                at_destination_raw = existing.get("at_destination")
-                if at_destination_raw in (None, ""):
-                    at_destination = distance_val == 0
-                else:
-                    at_destination = bool(at_destination_raw)
+                operation = container_data.get("operation") or existing.get("Операция", "")
             else:
                 distance_val = distance
-                at_destination = distance == 0
+                operation = container_data.get("operation", "")
             data = {
                 "Контейнер": container,
                 "Отгрузка на ЖД": existing.get("Отгрузка на ЖД", ""),
                 "Дата обновления слежения": container_data.get("date", ""),
-                "Операция": container_data.get("operation", ""),
+                "Операция": operation,
                 "Расстояние до станции назначения": distance_val,
                 "Станция местоположения": container_data.get("location", ""),
-                "at_destination": at_destination,
             }
             try:
                 self.google_sync.sync_row(data)

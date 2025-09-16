@@ -84,6 +84,14 @@ class WorksheetAdapter:
         ]
         return dict(zip(headers, values))
 
+    def list_containers(self) -> list[str]:
+        if hasattr(self.worksheet, "list_containers"):
+            return self.worksheet.list_containers()
+        try:  # pragma: no cover - real gspread
+            return self.worksheet.col_values(1)
+        except Exception:
+            return []
+
     def append_row(self, row: SheetRow) -> None:
         """Append *row* to the worksheet.
 
@@ -181,21 +189,23 @@ class GoogleSheetsSync:
         at_destination: bool,
         stagnant_days: int = 0,
     ) -> str:
-        """Map arbitrary *status* to one of three allowed values."""
+        """Map arbitrary *status* to one of four allowed values."""
         allowed = {
             "в пути": "В пути",
-            "прибыл на станцию назначения": "прибыл на станцию назначения",
-            "простой в пути": "простой в пути",
+            "простой в пути": "Простой в пути",
+            "прибыл на станцию": "Прибыл на станцию",
+            "прибыл на станцию назначения": "Прибыл на станцию",
+            "отгружен": "Отгружен",
         }
         if status:
             key = status.strip().lower()
             if key in allowed:
                 return allowed[key]
 
-        if at_destination and distance == 0:
-            return "прибыл на станцию назначения"
+        if at_destination or distance == 0:
+            return "Прибыл на станцию"
         if stagnant_days >= 1:
-            return "простой в пути"
+            return "Простой в пути"
         return "В пути"
 
     # ------------------------------------------------------------------
@@ -218,9 +228,12 @@ class GoogleSheetsSync:
         loading_date = str(data["Отгрузка на ЖД"])
         status = data.get("Операция")
         at_destination = bool(data.get("at_destination", False))
-        operation = self.map_operation(status, distance, at_destination, stagnant_days)
 
         existing_index = self.ws.find_row(container)
+        if existing_index is None:
+            operation = "Отгружен"
+        else:
+            operation = self.map_operation(status, distance, at_destination, stagnant_days)
         today = self.now_func().strftime("%d-%m-%Y")
 
         if existing_index is None:

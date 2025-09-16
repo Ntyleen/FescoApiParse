@@ -91,6 +91,32 @@ class DummyFirebirdManager:
         pass
 
 
+class DummyWorksheet:
+    def __init__(self, containers):
+        self.rows = [{"Контейнер": c, "Отгрузка на ЖД": "2024-01-01"} for c in containers]
+
+    def list_containers(self):
+        return [r["Контейнер"] for r in self.rows]
+
+    def find_row(self, container):
+        for i, r in enumerate(self.rows):
+            if r["Контейнер"] == container:
+                return i
+        return None
+
+    def get_row(self, index):
+        return self.rows[index]
+
+
+class DummyGoogleSync:
+    def __init__(self, containers=None):
+        self.ws = DummyWorksheet(containers) if containers is not None else None
+        self.calls = []
+
+    def sync_row(self, data, stagnant_days: int = 0):
+        self.calls.append((data, stagnant_days))
+
+
 @pytest.mark.asyncio
 async def test_run_full_workflow_groups_and_updates():
     containers = [
@@ -170,6 +196,112 @@ async def test_date_mapping_earliest_wins_simple_case():
 
     assert firebird.updated == []
 
+
+@pytest.mark.asyncio
+async def test_final_google_sheet_sync_from_cache():
+    containers = [
+        ContainerInfo(id=1, container_number="CONT1", line_id=1, current_dates={}),
+        ContainerInfo(id=2, container_number="CONT2", line_id=1, current_dates={}),
+    ]
+    firebird = DummyFirebirdManager(containers)
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    google_sync = DummyGoogleSync([c.container_number for c in containers])
+    engine = ContainerTrackingEngine(config, cache, firebird, google_sync=google_sync)
+
+    order_map = {c.container_number: "ORD1" for c in containers}
+    engine.api_client.find_order_by_container = AsyncMock(side_effect=lambda s, cn: order_map[cn])
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(
+            date="2024-01-01", operation="Load", location="Test", remainingDistance="0"
+        )
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert len(google_sync.calls) == len(containers) * 2
+
+
+@pytest.mark.asyncio
+async def test_missing_distance_keeps_existing_sheet_status():
+    containers = [
+        ContainerInfo(id=1, container_number="CONT1", line_id=1, current_dates={}),
+    ]
+    firebird = DummyFirebirdManager(containers)
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    google_sync = DummyGoogleSync([c.container_number for c in containers])
+    # Prepopulate sheet with existing distance
+    google_sync.ws.rows[0]["Расстояние до станции назначения"] = 123
+    engine = ContainerTrackingEngine(config, cache, firebird, google_sync=google_sync)
+
+    order_map = {c.container_number: "ORD1" for c in containers}
+    engine.api_client.find_order_by_container = AsyncMock(side_effect=lambda s, cn: order_map[cn])
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(
+            date="2024-01-01", operation="Load", location="Test", remainingDistance=None
+        )
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    # Existing distance should be preserved and no at_destination field added
+    assert len(google_sync.calls) >= 1
+    data, _ = google_sync.calls[-1]
+    assert data["Расстояние до станции назначения"] == 123
+    assert "at_destination" not in data
+
+
+@pytest.mark.asyncio
+async def test_preserve_zero_distance_when_api_omits_distance():
+    containers = [
+        ContainerInfo(id=1, container_number="CONT1", line_id=1, current_dates={}),
+    ]
+    firebird = DummyFirebirdManager(containers)
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+    google_sync = DummyGoogleSync([c.container_number for c in containers])
+    # Prepopulate sheet with arrived distance
+    google_sync.ws.rows[0]["Расстояние до станции назначения"] = 0
+    engine = ContainerTrackingEngine(config, cache, firebird, google_sync=google_sync)
+
+    order_map = {c.container_number: "ORD1" for c in containers}
+    engine.api_client.find_order_by_container = AsyncMock(side_effect=lambda s, cn: order_map[cn])
+    engine.api_client.get_order_tracking = AsyncMock(return_value={"data": []})
+    engine._data_unchanged = lambda cached, current: False
+
+    async def dummy_process_single_container(self, session, container, order_id, order_data):
+        res = TrackingResult(container_number=container.container_number)
+        res.order_id = order_id
+        res.last_event = ContainerEvent(
+            date="2024-01-01", operation="Load", location="Test", remainingDistance=None
+        )
+        return res
+
+    engine._process_single_container = types.MethodType(dummy_process_single_container, engine)
+
+    await engine.run_full_workflow(batch_size=10)
+
+    assert len(google_sync.calls) >= 1
+    data, _ = google_sync.calls[-1]
+    assert data["Расстояние до станции назначения"] == 0
+    assert "at_destination" not in data
+
+
 @pytest.mark.asyncio
 async def test_update_remaining_distance_when_date_skipped():
     container = ContainerInfo(
@@ -207,7 +339,9 @@ async def test_update_remaining_distance_when_date_skipped():
 
     await engine.run_full_workflow(batch_size=10)
 
-    assert firebird.updated == [(20, "500")]
+
+    assert firebird.updated == [(20, '500')]
+
 
 @pytest.mark.asyncio
 async def test_skip_container_with_no_order():
@@ -226,14 +360,6 @@ async def test_skip_container_with_no_order():
     assert stats.containers_loaded == 1
     assert stats.orders_processed == 0
     assert await engine.binding_manager.is_container_no_order("CONT1") is True
-
-
-class DummyGoogleSync:
-    def __init__(self):
-        self.calls = []
-
-    def sync_row(self, data, stagnant_days: int = 0):
-        self.calls.append((data, stagnant_days))
 
 
 @pytest.mark.asyncio

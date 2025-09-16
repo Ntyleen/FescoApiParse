@@ -57,7 +57,9 @@ class ContainerTrackingEngine:
         config: Config,
         cache: CacheBackend,
         firebird_manager: FirebirdEntityManager,  # ИЗМЕНЕНО: Один менеджер вместо двух
-        google_sync: GoogleSheetsSync | None = None,
+
+        google_sync: Optional["GoogleSheetsSync"] = None,
+
     ):
         self.config = config
         self.cache = cache
@@ -153,7 +155,9 @@ class ContainerTrackingEngine:
                     self.logger.debug(f"✅ Finished CARRIER pass: {carrier_selected} containers selected")
 
                 await self._log_final_statistics()
-                
+                if self.google_sync:
+                    await self._sync_google_sheet_from_cache()
+
         except Exception as e:
             self.logger.error(f"❌ Критическая ошибка в workflow: {e}")
             raise
@@ -515,7 +519,6 @@ class ContainerTrackingEngine:
                         "Операция": getattr(tracking_result.last_event, "operation", None)
                         if tracking_result.last_event
                         else None,
-                        "at_destination": distance_val == 0,
                     }
                     try:
                         self.google_sync.sync_row(row_data)
@@ -530,7 +533,72 @@ class ContainerTrackingEngine:
 
 
 
-    
+
+    async def _sync_google_sheet_from_cache(self) -> None:
+        containers = []
+        try:
+            containers = self.google_sync.ws.list_containers()
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка чтения контейнеров из Google Sheets: {e}")
+            return
+        for container in containers:
+            if not container or container == "Контейнер":
+                continue
+            order_id = await self.binding_manager.get_container_order(container)
+            if not order_id:
+                continue
+            cache_key = f"order_last_check:{order_id}"
+            order_summary = await self.cache.get(cache_key)
+            if not order_summary:
+                continue
+            norm_cn = normalize_container_number(container)
+            container_data = order_summary.get(norm_cn)
+            if not container_data:
+                continue
+            row_idx = self.google_sync.ws.find_row(container)
+            existing = (
+                self.google_sync.ws.get_row(row_idx)
+                if row_idx is not None
+                else {}
+            )
+            rem_raw = container_data.get("remainingDistance")
+            distance: Optional[float] = None
+            if rem_raw not in (None, ""):
+                try:
+                    distance = float(rem_raw)
+                except Exception:
+                    self.logger.debug(
+                        f"Невалидное значение remainingDistance '{rem_raw}' для {container}"
+                    )
+            if distance is None:
+                if not existing:
+                    # Не создавать новую строку с неизвестным расстоянием
+                    continue
+                try:
+                    distance_val = float(
+                        existing.get("Расстояние до станции назначения", 0)
+                    )
+                except Exception:
+                    distance_val = 0.0
+                operation = container_data.get("operation") or existing.get("Операция", "")
+            else:
+                distance_val = distance
+                operation = container_data.get("operation", "")
+            data = {
+                "Контейнер": container,
+                "Отгрузка на ЖД": existing.get("Отгрузка на ЖД", ""),
+                "Дата обновления слежения": container_data.get("date", ""),
+                "Операция": operation,
+                "Расстояние до станции назначения": distance_val,
+                "Станция местоположения": container_data.get("location", ""),
+            }
+            try:
+                self.google_sync.sync_row(data)
+            except Exception as e:
+                self.logger.error(
+                    f"❌ Ошибка синхронизации контейнера {container}: {e}"
+                )
+
     def _extract_order_summary(self, order_data: dict, container_numbers: List[str]) -> dict:
         """Извлечь краткую сводку заявки для проверки изменений"""
         

@@ -180,17 +180,19 @@ class EventProcessor:
         best_order_event = self._get_best_event(order_events)
         if best_order_event and best_order_event.remainingDistance:
             try:
-                current = (
+                rem_order = int(best_order_event.remainingDistance)
+                rem_final = (
                     int(final_event.remainingDistance)
-                    if final_event.remainingDistance is not None
-                    and str(final_event.remainingDistance).strip() != ""
+                    if final_event.remainingDistance not in (None, "")
                     else None
                 )
-                candidate = int(best_order_event.remainingDistance)
             except ValueError:
-                current = candidate = None
+                rem_order = rem_final = None
 
-            if current is None or (candidate is not None and candidate < current):
+            if rem_final is None or (
+                rem_order is not None and rem_order < rem_final
+            ):
+
                 final_event.remainingDistance = best_order_event.remainingDistance
 
         return final_event, has_duplicates, source

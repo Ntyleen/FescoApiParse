@@ -521,7 +521,7 @@ class ContainerTrackingEngine:
                         else None,
                     }
                     try:
-                        self.google_sync.sync_row(row_data)
+                        await self.google_sync.sync_row(row_data)
                     except Exception as gs_err:
                         self.logger.error(
                             f"❌ Ошибка синхронизации Google Sheets для {container_info.container_number}: {gs_err}"
@@ -593,7 +593,7 @@ class ContainerTrackingEngine:
                 "Станция местоположения": container_data.get("location", ""),
             }
             try:
-                self.google_sync.sync_row(data)
+                await self.google_sync.sync_row(data)
             except Exception as e:
                 self.logger.error(
                     f"❌ Ошибка синхронизации контейнера {container}: {e}"

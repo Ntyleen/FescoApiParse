@@ -113,8 +113,9 @@ class DummyGoogleSync:
         self.ws = DummyWorksheet(containers) if containers is not None else None
         self.calls = []
 
-    def sync_row(self, data, stagnant_days: int = 0):
+    async def sync_row(self, data, stagnant_days: int = 0):
         self.calls.append((data, stagnant_days))
+        return True
 
 
 @pytest.mark.asyncio

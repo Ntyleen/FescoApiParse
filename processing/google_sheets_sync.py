@@ -189,11 +189,13 @@ class GoogleSheetsSync:
         at_destination: bool,
         stagnant_days: int = 0,
     ) -> str:
-        """Map arbitrary *status* to one of three allowed values."""
+        """Map arbitrary *status* to one of four allowed values."""
         allowed = {
             "в пути": "В пути",
-            "прибыл на станцию назначения": "прибыл на станцию назначения",
-            "простой в пути": "простой в пути",
+            "простой в пути": "Простой в пути",
+            "прибыл на станцию": "Прибыл на станцию",
+            "прибыл на станцию назначения": "Прибыл на станцию",
+            "отгружен": "Отгружен",
         }
         if status:
             key = status.strip().lower()
@@ -201,9 +203,9 @@ class GoogleSheetsSync:
                 return allowed[key]
 
         if at_destination or distance == 0:
-            return "прибыл на станцию назначения"
+            return "Прибыл на станцию"
         if stagnant_days >= 1:
-            return "простой в пути"
+            return "Простой в пути"
         return "В пути"
 
     # ------------------------------------------------------------------
@@ -226,9 +228,12 @@ class GoogleSheetsSync:
         loading_date = str(data["Отгрузка на ЖД"])
         status = data.get("Операция")
         at_destination = bool(data.get("at_destination", False))
-        operation = self.map_operation(status, distance, at_destination, stagnant_days)
 
         existing_index = self.ws.find_row(container)
+        if existing_index is None:
+            operation = "Отгружен"
+        else:
+            operation = self.map_operation(status, distance, at_destination, stagnant_days)
         today = self.now_func().strftime("%d-%m-%Y")
 
         if existing_index is None:

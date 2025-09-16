@@ -238,18 +238,13 @@ class GoogleSheetsSync:
 
         existing_index = self.ws.find_row(container)
         if existing_index is None:
-            operation = "Отгружен"
-        else:
-            operation = self.map_operation(status, distance, at_destination, stagnant_days)
-        today = self.now_func().strftime("%d-%m-%Y")
-
-        if existing_index is None:
-            row = SheetRow(
-                container, loading_date, today, operation, distance, station_name
+            self.logger.info(
+                "Row for %s not found in Google Sheet; skipping update", container
             )
-            self.ws.append_row(row)
-            self.logger.info("Row added for %s", container)
-            return True
+            return False
+
+        operation = self.map_operation(status, distance, at_destination, stagnant_days)
+        today = self.now_func().strftime("%d-%m-%Y")
 
         current = self.ws.get_row(existing_index)
         tracking_date = current.get("Дата обновления слежения", today)

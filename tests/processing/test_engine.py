@@ -10,9 +10,12 @@ from datetime import datetime, timezone
 # Ensure project root is on sys.path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
-from config.settings import Config, FirebirdDatabaseConfig
+from config.settings import Config, FirebirdDatabaseConfig, GoogleSheetsConfig
 from models.container_event import TrackingResult, ContainerEvent
-from processing.ContainerTrackingEngine import ContainerTrackingEngine
+from processing.ContainerTrackingEngine import (
+    ContainerTrackingEngine,
+    create_container_tracking_engine,
+)
 from utils.db.firebird_manager import ContainerInfo
 from cache.cache_base import CacheBackend
 
@@ -116,6 +119,71 @@ class DummyGoogleSync:
     async def sync_row(self, data, stagnant_days: int = 0):
         self.calls.append((data, stagnant_days))
         return True
+
+
+@pytest.mark.asyncio
+async def test_factory_skips_google_sheets_when_config_missing(monkeypatch):
+    cache = DummyCache()
+    config = Config(database=FirebirdDatabaseConfig(database="test.fdb", password="pass"))
+
+    manager = DummyFirebirdManager([])
+    module = sys.modules["processing.ContainerTrackingEngine"]
+    monkeypatch.setattr(module, "create_firebird_entity_manager", lambda **_: manager)
+
+    engine = await create_container_tracking_engine(config, cache)
+    assert engine.google_sync is None
+
+
+@pytest.mark.asyncio
+async def test_factory_initialises_google_sheets_sync(monkeypatch):
+    cache = DummyCache()
+    config = Config(
+        database=FirebirdDatabaseConfig(database="test.fdb", password="pass"),
+        google_sheets=GoogleSheetsConfig(
+            sheet_id="sheet-123",
+            worksheet="Лист1",
+            client_secret_file="/tmp/secret.json",
+        ),
+    )
+
+    manager = DummyFirebirdManager([])
+    module = sys.modules["processing.ContainerTrackingEngine"]
+    monkeypatch.setattr(module, "create_firebird_entity_manager", lambda **_: manager)
+
+    def fake_create_sync(cfg):
+        assert cfg is config.google_sheets
+        return DummyGoogleSync(containers=["C1"])
+
+    monkeypatch.setattr(module, "create_sync_from_config", fake_create_sync)
+
+    engine = await create_container_tracking_engine(config, cache)
+    assert isinstance(engine.google_sync, DummyGoogleSync)
+    assert engine.google_sync.ws is not None
+
+
+@pytest.mark.asyncio
+async def test_factory_recovers_from_google_sheets_errors(monkeypatch):
+    cache = DummyCache()
+    config = Config(
+        database=FirebirdDatabaseConfig(database="test.fdb", password="pass"),
+        google_sheets=GoogleSheetsConfig(
+            sheet_id="sheet-123",
+            worksheet="Лист1",
+            client_secret_file="/tmp/secret.json",
+        ),
+    )
+
+    manager = DummyFirebirdManager([])
+    module = sys.modules["processing.ContainerTrackingEngine"]
+    monkeypatch.setattr(module, "create_firebird_entity_manager", lambda **_: manager)
+
+    def failing_create_sync(cfg):
+        raise FileNotFoundError("missing credentials")
+
+    monkeypatch.setattr(module, "create_sync_from_config", failing_create_sync)
+
+    engine = await create_container_tracking_engine(config, cache)
+    assert engine.google_sync is None
 
 
 @pytest.mark.asyncio

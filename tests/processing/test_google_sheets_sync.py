@@ -1,6 +1,11 @@
+import os
+import sys
 from datetime import datetime
 
 import pytest
+
+# Ensure project root is available for imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from processing.google_sheets_sync import (
     WorksheetAdapter,

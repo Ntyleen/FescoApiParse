@@ -26,7 +26,7 @@ from utils.db.firebird_manager import (
 from models.container_event import TrackingResult, ContainerEvent
 from models.processing_stats import ProcessingStats
 from utils.logging import get_logger
-from processing.google_sheets_sync import GoogleSheetsSync
+from processing.google_sheets_sync import GoogleSheetsSync, create_sync_from_config
 
 
 @dataclass
@@ -75,9 +75,13 @@ class ContainerTrackingEngine:
         
         # Отслеживание обработанных заявок в рамках сессии
         self.session_processed_orders: Set[str] = set()
-        
+
         self.logger = get_logger("fesco_tracker.engine")
         self.logger.info("🎼 ContainerTrackingEngine инициализирован с Firebird интеграцией")
+        if self.google_sync:
+            self.logger.info("📝 Google Sheets синхронизация активирована")
+        else:
+            self.logger.info("📝 Google Sheets синхронизация отключена")
     
     async def run_full_workflow(
         self,
@@ -748,10 +752,12 @@ async def create_container_tracking_engine(
         >>> stats = await engine.run_full_workflow(batch_size=100)
     """
     
+    logger = get_logger("processing.engine_factory")
+
     # Используем конфигурацию из основного config, если не передана отдельно
     if firebird_config is None:
         firebird_config = config.database.to_firebird_config()
-    
+
     # Создаем Firebird менеджер
     firebird_manager = create_firebird_entity_manager(
         host=firebird_config['host'],
@@ -760,12 +766,42 @@ async def create_container_tracking_engine(
         password=firebird_config['password'],
         entity_config=entity_config
     )
-    
+
     # Тестируем подключение
     if not await firebird_manager.test_connection():
         raise RuntimeError(f"❌ Не удается подключиться к Firebird: {firebird_config['host']}")
-    
+
+    google_sync: Optional[GoogleSheetsSync] = None
+    gs_cfg = getattr(config, "google_sheets", None)
+    if gs_cfg is not None:
+        sheet_id = getattr(gs_cfg, "sheet_id", "").strip()
+        client_secret = getattr(gs_cfg, "client_secret_file", "").strip()
+        if sheet_id and client_secret:
+            logger.info(
+                "📝 Настройка интеграции с Google Sheets для листа %s", gs_cfg.worksheet
+            )
+            try:
+                google_sync = await asyncio.to_thread(create_sync_from_config, gs_cfg)
+                logger.info("✅ Google Sheets интеграция активирована")
+            except ImportError as exc:
+                logger.warning(
+                    "⚠️ Google Sheets интеграция недоступна: %s", exc
+                )
+            except Exception as exc:
+                logger.error(
+                    "⚠️ Не удалось инициализировать Google Sheets: %s", exc
+                )
+        elif sheet_id or client_secret:
+            logger.warning(
+                "⚠️ Google Sheets конфигурация неполная — интеграция отключена"
+            )
+
     # Создаем engine
-    engine = ContainerTrackingEngine(config, cache, firebird_manager)
-    
+    engine = ContainerTrackingEngine(
+        config,
+        cache,
+        firebird_manager,
+        google_sync=google_sync,
+    )
+
     return engine

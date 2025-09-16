@@ -73,6 +73,18 @@ async def test_upsert_updates_tracking_date_only_on_distance_change():
     fixed_now = lambda: datetime(2025, 9, 8, 10, 0, 0)
     sync = GoogleSheetsSync(sheet, now_func=fixed_now)
 
+    sheet.worksheet.append_row(
+        SheetRow(
+            "MSCU1234567",
+            "01-09-2025",
+            "02-09-2025",
+            "Отгружен",
+            225.0,
+            "Москва",
+        )
+    )
+    initial_len = len(sheet.worksheet.rows)
+
     data = {
         "Контейнер": "MSCU1234567",
         "Отгрузка на ЖД": "01-09-2025",
@@ -81,9 +93,10 @@ async def test_upsert_updates_tracking_date_only_on_distance_change():
         "Операция": "В пути",
     }
     await sync.sync_row(data)
-    assert len(sheet.worksheet.rows) == 1
+    assert len(sheet.worksheet.rows) == initial_len
     first_date = sheet.worksheet.rows[0].tracking_date
-    assert sheet.worksheet.rows[0].operation == "Отгружен"
+    assert first_date == "02-09-2025"
+    assert sheet.worksheet.rows[0].operation == "В пути"
 
     # Second call with same distance -> date not changed
     await sync.sync_row(data)
@@ -97,6 +110,24 @@ async def test_upsert_updates_tracking_date_only_on_distance_change():
     assert sheet.worksheet.rows[0].tracking_date == "09-09-2025"
     assert sheet.worksheet.rows[0].distance == 218.0
     assert sheet.worksheet.rows[0].operation == "В пути"
+
+
+@pytest.mark.asyncio
+async def test_sync_row_skips_missing_container():
+    sheet = WorksheetAdapter(FakeWorksheet())
+    sync = GoogleSheetsSync(sheet)
+
+    data = {
+        "Контейнер": "TGHU7654321",
+        "Отгрузка на ЖД": "01-09-2025",
+        "Расстояние до станции назначения": 120.0,
+        "Станция местоположения": "Владивосток",
+        "Операция": "В пути",
+    }
+
+    result = await sync.sync_row(data)
+    assert result is False
+    assert len(sheet.worksheet.rows) == 0
 
 
 def test_adapter_with_gspread_like_object():

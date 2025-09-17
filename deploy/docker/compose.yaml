@@ -24,7 +24,7 @@ services:
       - .env/production.env
     volumes:
       - ./logs:/var/log/FescoApiParser
-    command: ["python", "main.py", "schedule", "--metrics-port", "8000"]
+    command: ["--metrics-port", "8000"]
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/metrics')\""]
       interval: 30s

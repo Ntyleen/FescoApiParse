@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Optional, Callable, Iterable, List
+from typing import Any, Dict, Optional, Callable, Iterable, List
 from zoneinfo import ZoneInfo
 import asyncio
+import json
 import os
 
 from utils.logging import get_logger
@@ -20,11 +21,12 @@ from config.settings import GoogleSheetsConfig
 try:  # pragma: no cover - optional dependency for real usage
     import gspread  # type: ignore
     from google.auth.transport.requests import Request  # type: ignore
+    from google.oauth2 import service_account  # type: ignore
     from google.oauth2.credentials import Credentials  # type: ignore
     from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore
 except Exception:  # pragma: no cover
     gspread = None  # type: ignore
-    Request = Credentials = InstalledAppFlow = None  # type: ignore
+    Request = Credentials = InstalledAppFlow = service_account = None  # type: ignore
 
 logger = get_logger("google_sheets_sync")
 
@@ -151,14 +153,19 @@ SCOPES = [
 def get_authenticated_worksheet(
     sheet_id: str,
     worksheet_name: str,
-    client_secret_file: str,
+    client_secret_file: str = "",
     token_file: str = "token.json",
+    service_account_file: Optional[str] = None,
+    service_account_info: Optional[Dict[str, Any] | str] = None,
+    subject: Optional[str] = None,
+    scopes: Optional[List[str]] = None,
 ) -> WorksheetAdapter:
     """Return an authenticated :class:`WorksheetAdapter` for Google Sheets.
 
-    The function performs the OAuth flow using the provided ``client_secret``
-    file generated in Google Cloud.  Credentials are cached in ``token_file``
-    so the interactive flow is required only once.
+    The helper supports both the traditional OAuth flow (using ``client_secret``
+    files) and service account credentials.  When a service account file or
+    JSON payload is provided the OAuth flow is skipped entirely, allowing the
+    application to run in headless environments without user interaction.
 
     Parameters
     ----------
@@ -168,26 +175,102 @@ def get_authenticated_worksheet(
         Name of the worksheet within the document.
     client_secret_file:
         Path to the OAuth 2.0 Client ID JSON file downloaded from Google Cloud.
+        Used when service account credentials are not supplied.
     token_file:
-        Location where the access/refresh token pair will be stored.  Defaults
-        to ``token.json`` in the current directory.
+        Location where the access/refresh token pair will be stored for OAuth.
+    service_account_file:
+        Optional path to the service account JSON key.
+    service_account_info:
+        Optional JSON payload (``dict`` or JSON string) with service account
+        credentials.  This is useful when credentials are provided via
+        environment variables or secret stores.
+    subject:
+        Optional subject for domain-wide delegation.
+    scopes:
+        Optional list of scopes to request.  Defaults to :data:`SCOPES` when
+        ``None``.
     """
 
-    if gspread is None or Credentials is None:
-        raise ImportError("gspread and google-auth libraries are required for OAuth")
+    if gspread is None:
+        raise ImportError("gspread and google-auth libraries are required")
 
-    creds: Optional[Credentials] = None
-    if os.path.exists(token_file):
-        creds = Credentials.from_authorized_user_file(token_file, SCOPES)
+    scopes_to_use = SCOPES if scopes is None else scopes
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+    creds: Any
+    # ------------------------------------------------------------------
+    # Service account authentication (preferred when available)
+    if (service_account_file and service_account_file.strip()) or service_account_info:
+        if service_account is None:
+            raise ImportError(
+                "google.oauth2.service_account is required for service account authentication"
+            )
+
+        info_payload: Optional[Dict[str, Any]] = None
+        if service_account_info is not None:
+            if isinstance(service_account_info, dict):
+                info_payload = service_account_info
+            elif isinstance(service_account_info, str):
+                candidate = service_account_info.strip()
+                if candidate:
+                    if os.path.exists(candidate):
+                        with open(candidate, "r", encoding="utf-8") as fp:
+                            info_payload = json.load(fp)
+                    else:
+                        try:
+                            info_payload = json.loads(candidate)
+                        except json.JSONDecodeError as exc:
+                            raise ValueError(
+                                "service_account_info must be a JSON string, dict or path to a JSON file"
+                            ) from exc
+            else:
+                raise TypeError(
+                    "service_account_info must be either a dict, JSON string or path to a JSON file"
+                )
+
+        if info_payload is not None:
+            creds = service_account.Credentials.from_service_account_info(
+                info_payload, scopes=scopes_to_use
+            )
+        elif service_account_file and service_account_file.strip():
+            creds = service_account.Credentials.from_service_account_file(
+                service_account_file, scopes=scopes_to_use
+            )
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(client_secret_file, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(token_file, "w", encoding="utf-8") as token:
-            token.write(creds.to_json())
+            raise ValueError(
+                "Service account configuration requires either service_account_file or service_account_info"
+            )
+
+        if subject:
+            creds = creds.with_subject(subject)
+
+    # ------------------------------------------------------------------
+    # OAuth authentication (interactive, cached locally)
+    else:
+        if Credentials is None or Request is None or InstalledAppFlow is None:
+            raise ImportError(
+                "google-auth oauth client libraries are required for interactive authentication"
+            )
+        if not client_secret_file:
+            raise ValueError(
+                "client_secret_file must be provided when service account credentials are not supplied"
+            )
+
+        oauth_creds: Optional[Credentials] = None
+        if os.path.exists(token_file):
+            oauth_creds = Credentials.from_authorized_user_file(token_file, scopes_to_use)
+
+        if not oauth_creds or not oauth_creds.valid:
+            if oauth_creds and oauth_creds.expired and oauth_creds.refresh_token:
+                oauth_creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    client_secret_file, scopes_to_use
+                )
+                oauth_creds = flow.run_local_server(port=0)
+            with open(token_file, "w", encoding="utf-8") as token:
+                token.write(oauth_creds.to_json())
+
+        creds = oauth_creds
 
     client = gspread.authorize(creds)
     worksheet = client.open_by_key(sheet_id).worksheet(worksheet_name)
@@ -339,8 +422,19 @@ class GoogleSheetsSync:
 def create_sync_from_config(cfg: GoogleSheetsConfig) -> GoogleSheetsSync:
     """Utility to build :class:`GoogleSheetsSync` from config."""
 
+    info = getattr(cfg, "service_account_info", None)
+    if isinstance(info, str) and not info.strip():
+        info = None
+
     worksheet = get_authenticated_worksheet(
-        cfg.sheet_id, cfg.worksheet, cfg.client_secret_file, cfg.token_file
+        cfg.sheet_id,
+        cfg.worksheet,
+        client_secret_file=getattr(cfg, "client_secret_file", ""),
+        token_file=getattr(cfg, "token_file", "token.json"),
+        service_account_file=(getattr(cfg, "service_account_file", "") or None),
+        service_account_info=info,
+        subject=getattr(cfg, "delegated_subject", None),
+        scopes=getattr(cfg, "scopes", None),
     )
     return GoogleSheetsSync(
         worksheet,

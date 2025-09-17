@@ -257,6 +257,10 @@ class GoogleSheetsConfig:
     token_file: str = "token.json"
     timezone: str = "Asia/Vladivostok"
     batch_size: int = 20
+    service_account_file: str = ""
+    service_account_info: Optional[Union[str, Dict[str, Any]]] = None
+    delegated_subject: Optional[str] = None
+    scopes: Optional[List[str]] = None
 
     def __post_init__(self):
         if not isinstance(self.sheet_id, str):
@@ -265,6 +269,22 @@ class GoogleSheetsConfig:
             raise ConfigError("worksheet должен быть строкой")
         if self.batch_size <= 0:
             raise ConfigError("batch_size должен быть положительным")
+        self.client_secret_file = self.client_secret_file.strip()
+        self.service_account_file = self.service_account_file.strip()
+        if isinstance(self.service_account_info, str):
+            info = self.service_account_info.strip()
+            self.service_account_info = info if info else None
+        elif self.service_account_info is not None and not isinstance(self.service_account_info, dict):
+            raise ConfigError(
+                "service_account_info должен быть строкой или словарем с учетными данными"
+            )
+        if self.delegated_subject is not None:
+            if not isinstance(self.delegated_subject, str):
+                raise ConfigError("delegated_subject должен быть строкой")
+            self.delegated_subject = self.delegated_subject.strip() or None
+        if self.scopes is not None:
+            if not isinstance(self.scopes, list) or not all(isinstance(scope, str) for scope in self.scopes):
+                raise ConfigError("scopes должен быть списком строк")
 
 
 @dataclass
@@ -560,10 +580,14 @@ class Config:
         
         if "database" in result and isinstance(result["database"], dict):
             result["database"]["password"] = "***"
-        
+
         if "external_database" in result and isinstance(result["external_database"], dict):
             result["external_database"]["password"] = "***"
-            
+
+        google_cfg = result.get("google_sheets")
+        if isinstance(google_cfg, dict) and google_cfg.get("service_account_info"):
+            google_cfg["service_account_info"] = "***"
+
         return result
 
 

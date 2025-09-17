@@ -819,7 +819,17 @@ async def create_container_tracking_engine(
     if gs_cfg is not None:
         sheet_id = getattr(gs_cfg, "sheet_id", "").strip()
         client_secret = getattr(gs_cfg, "client_secret_file", "").strip()
-        if sheet_id and client_secret:
+        service_account_file = getattr(gs_cfg, "service_account_file", "")
+        if isinstance(service_account_file, str):
+            service_account_file = service_account_file.strip()
+        service_account_info = getattr(gs_cfg, "service_account_info", None)
+        if isinstance(service_account_info, str):
+            service_account_info = service_account_info.strip() or None
+        has_service_account = bool(service_account_file) or service_account_info is not None
+        has_oauth = bool(client_secret)
+        has_credentials = has_oauth or has_service_account
+
+        if sheet_id and has_credentials:
             logger.info(
                 "📝 Настройка интеграции с Google Sheets для листа %s", gs_cfg.worksheet
             )
@@ -834,9 +844,13 @@ async def create_container_tracking_engine(
                 logger.error(
                     "⚠️ Не удалось инициализировать Google Sheets: %s", exc
                 )
-        elif sheet_id or client_secret:
+        elif sheet_id and not has_credentials:
             logger.warning(
-                "⚠️ Google Sheets конфигурация неполная — интеграция отключена"
+                "⚠️ Google Sheets конфигурация неполная — отсутствуют учетные данные"
+            )
+        elif has_credentials and not sheet_id:
+            logger.warning(
+                "⚠️ Google Sheets конфигурация неполная — не указан sheet_id"
             )
 
     # Создаем engine

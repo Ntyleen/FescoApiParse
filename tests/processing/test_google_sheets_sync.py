@@ -1,6 +1,9 @@
+import json
 import os
 import sys
 from datetime import datetime
+from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 
@@ -13,6 +16,7 @@ from processing.google_sheets_sync import (
     SheetRow,
     create_sync_from_config,
 )
+import processing.google_sheets_sync as gs_sync
 from config.settings import GoogleSheetsConfig
 
 
@@ -163,11 +167,24 @@ def test_create_sync_from_config(monkeypatch):
     )
     fake_ws = WorksheetAdapter(FakeWorksheet())
 
-    def fake_auth(sheet_id, worksheet_name, client_secret_file, token_file="token.json"):
+    def fake_auth(
+        sheet_id,
+        worksheet_name,
+        client_secret_file="",
+        token_file="token.json",
+        service_account_file=None,
+        service_account_info=None,
+        subject=None,
+        scopes=None,
+    ):
         assert sheet_id == "ID1"
         assert worksheet_name == "Лист1"
         assert client_secret_file == "secret.json"
         assert token_file == "token.json"
+        assert service_account_file in (None, "")
+        assert service_account_info is None
+        assert subject is None
+        assert scopes is None
         return fake_ws
 
     monkeypatch.setattr(
@@ -176,6 +193,86 @@ def test_create_sync_from_config(monkeypatch):
     sync = create_sync_from_config(cfg)
     assert isinstance(sync, GoogleSheetsSync)
     assert sync.ws is fake_ws
+
+
+def test_get_authenticated_worksheet_with_service_account(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class DummyCreds:
+        def __init__(self, source: str):
+            self.source = source
+            self.subject: Optional[str] = None
+
+        def with_subject(self, subject: str):
+            self.subject = subject
+            return self
+
+    class DummyCredentialsFactory:
+        @staticmethod
+        def from_service_account_file(filename, scopes=None):
+            captured["file"] = filename
+            captured["scopes"] = scopes
+            return DummyCreds("file")
+
+        @staticmethod
+        def from_service_account_info(info, scopes=None):
+            captured["info"] = info
+            captured["scopes"] = scopes
+            return DummyCreds("info")
+
+    class DummyServiceAccountModule:
+        Credentials = DummyCredentialsFactory
+
+    class DummySpreadsheet:
+        def worksheet(self, name):
+            captured["worksheet_name"] = name
+            return SimpleNamespace(name=name)
+
+    class DummyClient:
+        def __init__(self):
+            self.sheet = DummySpreadsheet()
+
+        def open_by_key(self, key):
+            captured["sheet_id"] = key
+            return self.sheet
+
+    def fake_authorize(creds):
+        captured["authorized_creds"] = creds
+        return DummyClient()
+
+    monkeypatch.setattr(gs_sync, "service_account", DummyServiceAccountModule)
+    monkeypatch.setattr(gs_sync, "gspread", SimpleNamespace(authorize=fake_authorize))
+
+    adapter = gs_sync.get_authenticated_worksheet(
+        "sheet-1",
+        "Лист1",
+        service_account_file="/path/key.json",
+        subject="user@example.com",
+    )
+
+    assert isinstance(adapter, WorksheetAdapter)
+    assert captured["file"] == "/path/key.json"
+    assert captured["sheet_id"] == "sheet-1"
+    assert captured["worksheet_name"] == "Лист1"
+    assert captured["authorized_creds"].source == "file"
+    assert captured["authorized_creds"].subject == "user@example.com"
+    assert captured["scopes"] == gs_sync.SCOPES
+
+    info_payload = {"type": "service_account", "client_email": "robot@example.com"}
+    adapter = gs_sync.get_authenticated_worksheet(
+        "sheet-2",
+        "Лист2",
+        service_account_info=json.dumps(info_payload),
+        scopes=["scope1"],
+    )
+
+    assert isinstance(adapter, WorksheetAdapter)
+    assert captured["info"] == info_payload
+    assert captured["sheet_id"] == "sheet-2"
+    assert captured["worksheet_name"] == "Лист2"
+    assert captured["authorized_creds"].source == "info"
+    assert captured["authorized_creds"].subject is None
+    assert captured["scopes"] == ["scope1"]
 
 
 @pytest.mark.asyncio

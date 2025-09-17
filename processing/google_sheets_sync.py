@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Optional, Callable
+from typing import Dict, Optional, Callable, Iterable, List
 from zoneinfo import ZoneInfo
 import asyncio
 import os
@@ -114,6 +114,32 @@ class WorksheetAdapter:
         except Exception:  # pragma: no cover - fake worksheet branch
             self.worksheet.update_row(index, row)
 
+    def batch_update_rows(self, updates: Iterable[tuple[int, SheetRow]]) -> None:
+        """Update multiple rows using a single batch call when possible."""
+
+        updates = list(updates)
+        if not updates:
+            return
+        try:
+            if hasattr(self.worksheet, "batch_update_rows"):
+                self.worksheet.batch_update_rows(updates)
+                return
+        except Exception:
+            pass
+
+        payload = [
+            {
+                "range": f"A{index+1}:F{index+1}",
+                "values": [row.to_list()],
+            }
+            for index, row in updates
+        ]
+        try:
+            self.worksheet.batch_update(payload)
+        except Exception:  # pragma: no cover - fallback for fake worksheet
+            for index, row in updates:
+                self.worksheet.update_row(index, row)
+
 
 # Default scopes for OAuth2 authentication
 SCOPES = [
@@ -176,11 +202,13 @@ class GoogleSheetsSync:
         worksheet: WorksheetAdapter,
         timezone: str = "Asia/Vladivostok",
         now_func: Callable[[], datetime] | None = None,
+        batch_size: int = 20,
     ):
         self.ws = worksheet
         self.tz = ZoneInfo(timezone)
         self.now_func = now_func or (lambda: datetime.now(self.tz))
         self.logger = get_logger("google_sheets_sync")
+        self.batch_size = max(1, batch_size)
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -215,8 +243,19 @@ class GoogleSheetsSync:
 
         return await asyncio.to_thread(self._sync_row, data, stagnant_days)
 
+    async def sync_rows(
+        self,
+        rows: List[Dict[str, object]],
+        stagnant_days: int = 0,
+    ) -> int:
+        """Batch update multiple rows and return number of changed entries."""
+
+        return await asyncio.to_thread(self._sync_rows, rows, stagnant_days)
+
     # ------------------------------------------------------------------
-    def _sync_row(self, data: Dict[str, object], stagnant_days: int = 0) -> bool:
+    def _prepare_row_update(
+        self, data: Dict[str, object], stagnant_days: int = 0
+    ) -> Optional[tuple[int, SheetRow, bool]]:
         """Upsert a single row in the worksheet.
 
         Parameters
@@ -241,7 +280,7 @@ class GoogleSheetsSync:
             self.logger.info(
                 "Row for %s not found in Google Sheet; skipping update", container
             )
-            return False
+            return None
 
         operation = self.map_operation(status, distance, at_destination, stagnant_days)
         today = self.now_func().strftime("%d-%m-%Y")
@@ -267,9 +306,34 @@ class GoogleSheetsSync:
         if existing_distance != distance:
             row.tracking_date = today
 
-        self.ws.update_row(existing_index, row)
-        self.logger.info("Row updated for %s", container)
-        return existing_distance != distance
+        return existing_index, row, existing_distance != distance
+
+    def _sync_row(self, data: Dict[str, object], stagnant_days: int = 0) -> bool:
+        prepared = self._prepare_row_update(data, stagnant_days)
+        if not prepared:
+            return False
+        index, row, changed = prepared
+        self.ws.batch_update_rows([(index, row)])
+        self.logger.info("Row updated for %s", row.container)
+        return changed
+
+    def _sync_rows(self, rows: List[Dict[str, object]], stagnant_days: int = 0) -> int:
+        updates: list[tuple[int, SheetRow]] = []
+        changed = 0
+        for data in rows:
+            prepared = self._prepare_row_update(data, stagnant_days)
+            if not prepared:
+                continue
+            index, row, is_changed = prepared
+            updates.append((index, row))
+            if is_changed:
+                changed += 1
+            if len(updates) >= self.batch_size:
+                self.ws.batch_update_rows(updates)
+                updates.clear()
+        if updates:
+            self.ws.batch_update_rows(updates)
+        return changed
 
 
 def create_sync_from_config(cfg: GoogleSheetsConfig) -> GoogleSheetsSync:
@@ -278,4 +342,8 @@ def create_sync_from_config(cfg: GoogleSheetsConfig) -> GoogleSheetsSync:
     worksheet = get_authenticated_worksheet(
         cfg.sheet_id, cfg.worksheet, cfg.client_secret_file, cfg.token_file
     )
-    return GoogleSheetsSync(worksheet, timezone=cfg.timezone)
+    return GoogleSheetsSync(
+        worksheet,
+        timezone=cfg.timezone,
+        batch_size=getattr(cfg, "batch_size", 20),
+    )

@@ -29,13 +29,21 @@ class ConfigError(Exception):
 @dataclass
 class ApiConfig:
     """Конфигурация FESCO API"""
+
     base_url: str = "https://api.fesco.com/api/v1/lk/"
     token_type: str = "Bearer"
     auth_token: str = ""
     timeout_seconds: int = 15
     max_parallel: int = 10
-    max_retries: int = 3
-    user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    retry_attempts: int = 3
+    retry_backoff_seconds: float = 0.5
+    keepalive_timeout: float = 60.0
+    dns_cache_ttl: int = 600
+    user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/138.0.0.0 Safari/537.36"
+    )
     
     def __post_init__(self):
         if not self.base_url.startswith(("http://", "https://")):
@@ -44,6 +52,14 @@ class ApiConfig:
             raise ConfigError("timeout_seconds должен быть положительным")
         if self.max_parallel <= 0:
             raise ConfigError("max_parallel должен быть положительным")
+        if self.retry_attempts <= 0:
+            raise ConfigError("retry_attempts должен быть положительным")
+        if self.retry_backoff_seconds <= 0:
+            raise ConfigError("retry_backoff_seconds должен быть положительным")
+        if self.keepalive_timeout <= 0:
+            raise ConfigError("keepalive_timeout должен быть положительным")
+        if self.dns_cache_ttl < 0:
+            raise ConfigError("dns_cache_ttl не может быть отрицательным")
 
 
 @dataclass
@@ -240,12 +256,15 @@ class GoogleSheetsConfig:
     client_secret_file: str = ""
     token_file: str = "token.json"
     timezone: str = "Asia/Vladivostok"
+    batch_size: int = 20
 
     def __post_init__(self):
         if not isinstance(self.sheet_id, str):
             raise ConfigError("sheet_id должен быть строкой")
         if not isinstance(self.worksheet, str):
             raise ConfigError("worksheet должен быть строкой")
+        if self.batch_size <= 0:
+            raise ConfigError("batch_size должен быть положительным")
 
 
 @dataclass

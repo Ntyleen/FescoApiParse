@@ -9,12 +9,8 @@ HTTP клиент для работы с FESCO API:
 """
 
 # Основной API клиент
-from .api_client import (
-    FescoApiClient,
-    FescoApiError,
-    AuthenticationError,
-    ApiRequestError
-)
+from .api_client import FescoApiClient
+from .exceptions import FescoApiError, AuthenticationError, ApiRequestError
 
 # Публичный API модуля
 __all__ = [

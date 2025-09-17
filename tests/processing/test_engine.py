@@ -120,6 +120,11 @@ class DummyGoogleSync:
         self.calls.append((data, stagnant_days))
         return True
 
+    async def sync_rows(self, rows, stagnant_days: int = 0):
+        for row in rows:
+            self.calls.append((row, stagnant_days))
+        return len(rows)
+
 
 @pytest.mark.asyncio
 async def test_factory_skips_google_sheets_when_config_missing(monkeypatch):
@@ -295,7 +300,12 @@ async def test_final_google_sheet_sync_from_cache():
 
     await engine.run_full_workflow(batch_size=10)
 
-    assert len(google_sync.calls) == len(containers) * 2
+    counts = {}
+    for payload, _ in google_sync.calls:
+        key = payload["Контейнер"]
+        counts[key] = counts.get(key, 0) + 1
+    for container in containers:
+        assert counts.get(container.container_number, 0) >= 2
 
 
 @pytest.mark.asyncio

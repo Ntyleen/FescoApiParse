@@ -122,7 +122,7 @@ class ContainerTrackingEngine:
         self.logger.info("✅ Firebird подключение проверено")
         
         # Настройка HTTP сессии для API запросов
-        connector = aiohttp.TCPConnector(limit_per_host=5, keepalive_timeout=60)
+        connector = self.api_client.transport.create_connector()
         timeout = aiohttp.ClientTimeout(total=self.config.api.timeout_seconds)
         
         try:

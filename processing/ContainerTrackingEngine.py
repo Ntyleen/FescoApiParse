@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import time
 from typing import List, Dict, Set, AsyncGenerator, Optional, Union, Tuple, Any
 import aiohttp
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from utils.db.firebird_manager import (
 from models.container_event import TrackingResult, ContainerEvent
 from models.processing_stats import ProcessingStats
 from utils.logging import get_logger
+from utils.metrics import CONTAINERS_PROCESSED, PROCESSING_ERRORS, PROCESSING_DURATION
 from processing.google_sheets_sync import GoogleSheetsSync, create_sync_from_config
 
 
@@ -120,7 +122,7 @@ class ContainerTrackingEngine:
         self.logger.info("✅ Firebird подключение проверено")
         
         # Настройка HTTP сессии для API запросов
-        connector = aiohttp.TCPConnector(limit_per_host=5, keepalive_timeout=60)
+        connector = self.api_client.transport.create_connector()
         timeout = aiohttp.ClientTimeout(total=self.config.api.timeout_seconds)
         
         try:
@@ -319,25 +321,30 @@ class ContainerTrackingEngine:
                 async with semaphore:
                     return await task
             
+            start_time = time.perf_counter()
             results = await asyncio.gather(
                 *[process_with_semaphore(task) for task in container_tasks],
                 return_exceptions=True
             )
-            
+            PROCESSING_DURATION.observe(time.perf_counter() - start_time)
+
             # Обрабатываем результаты с явной типизацией
             successful_results: List[Tuple[ContainerInfo, TrackingResult]] = []
             for i, result in enumerate(results):
                 # Увеличиваем счетчик обработанных в любом случае
                 self.engine_stats.containers_processed += 1
-                
+                CONTAINERS_PROCESSED.inc()
+
                 if isinstance(result, Exception):
                     # Это исключение - логируем и пропускаем
                     self.logger.error(f"❌ Ошибка обработки {containers[i].container_number}: {result}")
+                    PROCESSING_ERRORS.inc()
                     continue
-                
+
                 # Явная проверка типа для IDE
                 if not isinstance(result, TrackingResult):
                     self.logger.error(f"❌ Неожиданный тип результата для {containers[i].container_number}: {type(result)}")
+                    PROCESSING_ERRORS.inc()
                     continue
                 
                 # Теперь IDE точно знает, что result это TrackingResult
@@ -423,7 +430,9 @@ class ContainerTrackingEngine:
         container_results: List[Tuple[ContainerInfo, TrackingResult]]
     ) -> None:
         written_count = 0
+        rows_to_sync: list[Dict[str, object]] = []
         for container_info, tracking_result in container_results:
+            row_data_for_google: Optional[Dict[str, object]] = None
             try:
                 events = tracking_result.events or ([] if not tracking_result.last_event else [tracking_result.last_event])
                 date_in_col = self.firebird_manager.entity_config.date_in
@@ -513,7 +522,7 @@ class ContainerTrackingEngine:
                         distance_val = float(distance) if distance is not None else 0.0
                     except (TypeError, ValueError):
                         distance_val = 0.0
-                    row_data = {
+                    row_data_for_google = {
                         "Контейнер": container_info.container_number,
                         "Отгрузка на ЖД": container_info.current_dates.get(
                             self.firebird_manager.entity_config.date_railway_loading, ""
@@ -526,22 +535,42 @@ class ContainerTrackingEngine:
                         if tracking_result.last_event
                         else None,
                     }
-                    try:
-                        row_updated = await self.google_sync.sync_row(row_data)
-                        if row_updated:
-                            self.engine_stats.google_rows_updated += 1
-                        else:
-                            self.logger.debug(
-                                f"📝 Google Sheets без изменений для {container_info.container_number}"
-                            )
-                    except Exception as gs_err:
-                        self.logger.error(
-                            f"❌ Ошибка синхронизации Google Sheets для {container_info.container_number}: {gs_err}"
-                        )
             except Exception as e:
                 self.logger.error(f"❌ Ошибка записи {tracking_result.container_number}: {e}")
+            else:
+                if self.google_sync:
+                    if row_data_for_google is None and tracking_result.last_event:
+                        distance_val = 0.0
+                        remaining = getattr(tracking_result.last_event, "remainingDistance", None)
+                        if remaining not in (None, ""):
+                            try:
+                                distance_val = float(remaining)
+                            except Exception:
+                                distance_val = 0.0
+                        row_data_for_google = {
+                            "Контейнер": container_info.container_number,
+                            "Отгрузка на ЖД": container_info.current_dates.get(
+                                self.firebird_manager.entity_config.date_railway_loading, ""
+                            ),
+                            "Расстояние до станции назначения": distance_val,
+                            "Станция местоположения": getattr(tracking_result.last_event, "location", "")
+                            if tracking_result.last_event
+                            else "",
+                            "Операция": getattr(tracking_result.last_event, "operation", None)
+                            if tracking_result.last_event
+                            else None,
+                        }
+                    if row_data_for_google is not None:
+                        rows_to_sync.append(row_data_for_google)
         self.engine_stats.records_written += written_count
         self.logger.info(f"💾 Обновлено {written_count}/{len(container_results)} записей в Firebird")
+
+        if self.google_sync and rows_to_sync:
+            try:
+                updated = await self.google_sync.sync_rows(rows_to_sync)
+                self.engine_stats.google_rows_updated += updated
+            except Exception as gs_err:
+                self.logger.error(f"❌ Ошибка пакетной синхронизации Google Sheets: {gs_err}")
 
 
 
@@ -553,6 +582,7 @@ class ContainerTrackingEngine:
         except Exception as e:
             self.logger.error(f"❌ Ошибка чтения контейнеров из Google Sheets: {e}")
             return
+        batch: list[Dict[str, object]] = []
         for container in containers:
             if not container or container == "Контейнер":
                 continue
@@ -602,11 +632,14 @@ class ContainerTrackingEngine:
                 "Расстояние до станции назначения": distance_val,
                 "Станция местоположения": container_data.get("location", ""),
             }
+            batch.append(data)
+
+        if batch:
             try:
-                await self.google_sync.sync_row(data)
+                await self.google_sync.sync_rows(batch)
             except Exception as e:
                 self.logger.error(
-                    f"❌ Ошибка синхронизации контейнера {container}: {e}"
+                    f"❌ Ошибка синхронизации контейнеров ({len(batch)} записей): {e}"
                 )
 
     def _extract_order_summary(self, order_data: dict, container_numbers: List[str]) -> dict:

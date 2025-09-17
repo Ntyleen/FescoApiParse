@@ -11,7 +11,10 @@ api:
   # HTTP настройки
   timeout_seconds: 15
   max_parallel: 10
-  max_retries: 3
+  retry_attempts: 3
+  retry_backoff_seconds: 0.5
+  keepalive_timeout: 60
+  dns_cache_ttl: 600
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 
 # Настройки кэширования
@@ -53,6 +56,15 @@ output:
   filename: "fesco_tracking_results.json"
   sort_by_container: true
   include_metadata: true
+
+# Настройки Google Sheets
+google_sheets:
+  sheet_id: ""
+  worksheet: "Sheet1"
+  client_secret_file: ""
+  token_file: "token.json"
+  timezone: "Asia/Vladivостok"
+  batch_size: 20
 
 # Настройки обработки
 processing:

@@ -43,6 +43,14 @@ class FakeWorksheet:
     def update_row(self, index, row):
         self.rows[index] = row
 
+    def batch_update(self, payload):
+        for update in payload:
+            start = int(update["range"][1:].split(":")[0]) - 1
+            values = update["values"][0]
+            converted = values[:]
+            converted[4] = float(converted[4]) if converted[4] != "" else 0.0
+            self.rows[start] = SheetRow(*converted)
+
 
 class GspreadLikeWorksheet:
     """Minimal gspread-like worksheet for adapter tests."""
@@ -168,3 +176,37 @@ def test_create_sync_from_config(monkeypatch):
     sync = create_sync_from_config(cfg)
     assert isinstance(sync, GoogleSheetsSync)
     assert sync.ws is fake_ws
+
+
+@pytest.mark.asyncio
+async def test_sync_rows_batch_updates():
+    sheet = WorksheetAdapter(FakeWorksheet())
+    sheet.worksheet.append_row(
+        SheetRow("CNT1", "01-01-2024", "01-01-2024", "В пути", 100.0, "Москва")
+    )
+    sheet.worksheet.append_row(
+        SheetRow("CNT2", "02-01-2024", "02-01-2024", "В пути", 50.0, "Москва")
+    )
+
+    sync = GoogleSheetsSync(sheet, batch_size=1, now_func=lambda: datetime(2024, 1, 5))
+    rows = [
+        {
+            "Контейнер": "CNT1",
+            "Отгрузка на ЖД": "01-01-2024",
+            "Расстояние до станции назначения": 80.0,
+            "Станция местоположения": "Москва",
+            "Операция": "В пути",
+        },
+        {
+            "Контейнер": "CNT2",
+            "Отгрузка на ЖД": "02-01-2024",
+            "Расстояние до станции назначения": 50.0,
+            "Станция местоположения": "Москва",
+            "Операция": "В пути",
+        },
+    ]
+
+    changed = await sync.sync_rows(rows)
+    assert changed == 1
+    assert sheet.worksheet.rows[0].distance == 80.0
+    assert sheet.worksheet.rows[0].tracking_date == "05-01-2024"

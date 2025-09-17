@@ -8,7 +8,8 @@ from config.settings import Config
 from cache.cache_base import CacheBackend
 from models.container_event import TrackingResult
 from models.processing_stats import ProcessingStats
-from api.api_client import FescoApiClient, FescoApiError
+from api.api_client import FescoApiClient
+from api.exceptions import FescoApiError
 from .events import EventProcessor
 
 # НОВОЕ: Импорт логирования
@@ -42,7 +43,7 @@ class ContainerTracker:
         self.logger.info(f"🚀 ContainerTracker initialized")
         self.logger.debug(f"⚡ Parallels: {config.api.max_parallel}")
         self.logger.debug(f"⏱️ Timeout: {config.api.timeout_seconds}s")
-        self.logger.debug(f"🔄 Retries: {config.api.max_retries}")
+        self.logger.debug(f"🔄 Retries: {config.api.retry_attempts}")
     
     @log_execution_time()
     async def track_single_container(

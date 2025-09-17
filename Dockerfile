@@ -7,12 +7,14 @@ RUN useradd -m appuser \
     && mkdir -p /var/log/FescoApiParser \
     && chown -R appuser:appuser /var/log/FescoApiParser
 
-RUN apt update && apt install -y libfbclient2
+RUN apt update && apt install -y libfbclient2 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /app
+USER appuser
 
 ENV TZ=Asia/Vladivostok
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone

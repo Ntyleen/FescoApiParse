@@ -167,6 +167,33 @@ async def test_factory_initialises_google_sheets_sync(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_factory_initialises_google_sheets_with_service_account(monkeypatch):
+    cache = DummyCache()
+    config = Config(
+        database=FirebirdDatabaseConfig(database="test.fdb", password="pass"),
+        google_sheets=GoogleSheetsConfig(
+            sheet_id="sheet-123",
+            worksheet="Лист1",
+            service_account_file="/tmp/service.json",
+        ),
+    )
+
+    manager = DummyFirebirdManager([])
+    module = sys.modules["processing.ContainerTrackingEngine"]
+    monkeypatch.setattr(module, "create_firebird_entity_manager", lambda **_: manager)
+
+    def fake_create_sync(cfg):
+        assert cfg is config.google_sheets
+        return DummyGoogleSync(containers=["C2"])
+
+    monkeypatch.setattr(module, "create_sync_from_config", fake_create_sync)
+
+    engine = await create_container_tracking_engine(config, cache)
+    assert isinstance(engine.google_sync, DummyGoogleSync)
+    assert engine.google_sync.ws is not None
+
+
+@pytest.mark.asyncio
 async def test_factory_recovers_from_google_sheets_errors(monkeypatch):
     cache = DummyCache()
     config = Config(

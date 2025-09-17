@@ -432,6 +432,7 @@ class ContainerTrackingEngine:
         written_count = 0
         rows_to_sync: list[Dict[str, object]] = []
         for container_info, tracking_result in container_results:
+            row_data_for_google: Optional[Dict[str, object]] = None
             try:
                 events = tracking_result.events or ([] if not tracking_result.last_event else [tracking_result.last_event])
                 date_in_col = self.firebird_manager.entity_config.date_in
@@ -521,7 +522,7 @@ class ContainerTrackingEngine:
                         distance_val = float(distance) if distance is not None else 0.0
                     except (TypeError, ValueError):
                         distance_val = 0.0
-                    row_data = {
+                    row_data_for_google = {
                         "Контейнер": container_info.container_number,
                         "Отгрузка на ЖД": container_info.current_dates.get(
                             self.firebird_manager.entity_config.date_railway_loading, ""
@@ -534,43 +535,33 @@ class ContainerTrackingEngine:
                         if tracking_result.last_event
                         else None,
                     }
-                    try:
-                        row_updated = await self.google_sync.sync_row(row_data)
-                        if row_updated:
-                            self.engine_stats.google_rows_updated += 1
-                        else:
-                            self.logger.debug(
-                                f"📝 Google Sheets без изменений для {container_info.container_number}"
-                            )
-                    except Exception as gs_err:
-                        self.logger.error(
-                            f"❌ Ошибка синхронизации Google Sheets для {container_info.container_number}: {gs_err}"
-                        )
             except Exception as e:
                 self.logger.error(f"❌ Ошибка записи {tracking_result.container_number}: {e}")
             else:
-                if self.google_sync and tracking_result.last_event:
-                    distance_val = 0.0
-                    remaining = getattr(tracking_result.last_event, "remainingDistance", None)
-                    if remaining not in (None, ""):
-                        try:
-                            distance_val = float(remaining)
-                        except Exception:
-                            distance_val = 0.0
-                    row_data = {
-                        "Контейнер": container_info.container_number,
-                        "Отгрузка на ЖД": container_info.current_dates.get(
-                            self.firebird_manager.entity_config.date_railway_loading, ""
-                        ),
-                        "Расстояние до станции назначения": distance_val,
-                        "Станция местоположения": getattr(tracking_result.last_event, "location", "")
-                        if tracking_result.last_event
-                        else "",
-                        "Операция": getattr(tracking_result.last_event, "operation", None)
-                        if tracking_result.last_event
-                        else None,
-                    }
-                    rows_to_sync.append(row_data)
+                if self.google_sync:
+                    if row_data_for_google is None and tracking_result.last_event:
+                        distance_val = 0.0
+                        remaining = getattr(tracking_result.last_event, "remainingDistance", None)
+                        if remaining not in (None, ""):
+                            try:
+                                distance_val = float(remaining)
+                            except Exception:
+                                distance_val = 0.0
+                        row_data_for_google = {
+                            "Контейнер": container_info.container_number,
+                            "Отгрузка на ЖД": container_info.current_dates.get(
+                                self.firebird_manager.entity_config.date_railway_loading, ""
+                            ),
+                            "Расстояние до станции назначения": distance_val,
+                            "Станция местоположения": getattr(tracking_result.last_event, "location", "")
+                            if tracking_result.last_event
+                            else "",
+                            "Операция": getattr(tracking_result.last_event, "operation", None)
+                            if tracking_result.last_event
+                            else None,
+                        }
+                    if row_data_for_google is not None:
+                        rows_to_sync.append(row_data_for_google)
         self.engine_stats.records_written += written_count
         self.logger.info(f"💾 Обновлено {written_count}/{len(container_results)} записей в Firebird")
 

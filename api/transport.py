@@ -69,7 +69,7 @@ class TransportLayer:
 
         return aiohttp.TCPConnector(
             limit_per_host=self._config.api.max_parallel,
-            ttl_dns=self._config.api.dns_cache_ttl,
+            ttl_dns_cache=self._config.api.dns_cache_ttl,
             keepalive_timeout=self._config.api.keepalive_timeout,
         )
 
